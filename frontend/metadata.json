@@ -1,0 +1,7 @@
+{
+  "name": "AccounTech - Integrated Informatics Ecosystem",
+  "description": "A three-sided informatics ecosystem for the CMA Department at Phinma Araullo University, featuring adaptive drills, AI-powered document parsing, and predictive analytics for board exam readiness.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
