@@ -26,18 +26,25 @@ async function seed(): Promise<void> {
   }
 
   const students = [
-    { studentId: '01-2223-123456', phinmaEmail: 'student@phinmaed.com' },
-    { studentId: '01-2425-000001', phinmaEmail: 'test@phinmaed.com' },
-    { studentId: '01-2223-998877', phinmaEmail: 'juan.delacruz@phinmaed.com' },
-    { studentId: '01-2425-000777', phinmaEmail: 'tira.deguzman.au@phinmaed.com' },
+    { studentId: '01-2223-123456', phinmaEmail: 'student@phinmaed.com', enrolledByFacultyEmail: 'faculty@phinmaed.com' },
+    { studentId: '01-2425-000001', phinmaEmail: 'test@phinmaed.com', enrolledByFacultyEmail: 'faculty@phinmaed.com' },
+    { studentId: '01-2223-998877', phinmaEmail: 'juan.delacruz@phinmaed.com', enrolledByFacultyEmail: 'faculty@phinmaed.com' },
+    { studentId: '01-2425-000777', phinmaEmail: 'tira.deguzman.au@phinmaed.com', enrolledByFacultyEmail: 'faculty@phinmaed.com' },
   ];
 
   for (const student of students) {
+    await AllowedStudentModel.deleteOne({
+      $or: [
+        { studentId: student.studentId },
+        { phinmaEmail: student.phinmaEmail }
+      ]
+    });
     await AllowedStudentModel.updateOne(
       { studentId: student.studentId },
       {
         $set: {
           phinmaEmail: student.phinmaEmail,
+          enrolledByFacultyEmail: student.enrolledByFacultyEmail,
         },
       },
       { upsert: true },
@@ -84,11 +91,13 @@ async function seed(): Promise<void> {
       name: 'Student User',
       isActivated: true,
       isActive: true,
+      studentId: '01-2223-123456',
     },
   ];
 
   for (const user of users) {
     const passwordHash = await hashValue(user.password);
+    await UserModel.deleteOne({ email: user.email });
     await UserModel.updateOne(
       { email: user.email },
       {
@@ -98,6 +107,7 @@ async function seed(): Promise<void> {
           name: user.name,
           isActivated: user.isActivated,
           isActive: user.isActive,
+          studentId: (user as any).studentId || null,
         },
         $setOnInsert: {
           email: user.email,

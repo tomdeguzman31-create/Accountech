@@ -7,6 +7,7 @@ import {
 	facultyRosterReadiness,
 	leaderboard,
 	myProgress,
+	studentHistory,
 } from './analytics.service.js';
 
 const router = Router();
@@ -16,5 +17,7 @@ router.get('/overview', requireAuth, requireRoles(['ADMIN', 'FACULTY']), asyncHa
 router.get('/faculty-readiness', requireAuth, requireRoles(['ADMIN']), asyncHandler(facultyRosterReadiness));
 router.get('/faculty-instructional-report', requireAuth, requireRoles(['FACULTY', 'ADMIN']), asyncHandler(facultyInstructionalReport));
 router.get('/leaderboard', requireAuth, asyncHandler(leaderboard));
+router.get('/student/:studentId', requireAuth, requireRoles(['FACULTY', 'ADMIN']), asyncHandler(studentHistory));
+
 
 export default router;

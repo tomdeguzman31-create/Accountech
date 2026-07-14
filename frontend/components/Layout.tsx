@@ -16,6 +16,7 @@ import {
   History,
   Bell,
   Trophy,
+  BarChart3,
 } from 'lucide-react';
 
 export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -44,7 +45,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
 
       <aside
         className={`
-        fixed inset-y-0 left-0 z-40 w-72 bg-[#1e3a8a] text-white transform transition-transform duration-300 ease-in-out md:relative md:translate-x-0
+        fixed inset-y-0 left-0 z-40 w-72 bg-[#1e3a8a] text-white transform transition-transform duration-300 ease-in-out md:relative md:w-[334px] md:translate-x-0
         ${isSidebarOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full'}
       `}
       >
@@ -188,6 +189,19 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                   <span className="truncate text-left leading-tight">Curriculum Management</span>
                 </button>
                 <button
+                  onClick={() => navigateTo('DASHBOARD', 'ITEM_ANALYSIS')}
+                  className={`w-full flex items-center gap-4 px-4 py-3 rounded-xl transition-all font-bold text-sm ${
+                    activeTab === 'ITEM_ANALYSIS'
+                      ? 'bg-[#065f46] text-[#facc15] shadow-lg'
+                      : 'hover:bg-blue-800/50 text-blue-100'
+                  }`}
+                >
+                  <div className="w-6 flex justify-center shrink-0">
+                    <BarChart3 size={18} />
+                  </div>
+                  <span>Item Analysis</span>
+                </button>
+                <button
                   onClick={() => navigateTo('DASHBOARD', 'ANNOUNCEMENTS')}
                   className={`w-full flex items-center gap-4 px-4 py-3 rounded-xl transition-all font-bold text-sm ${
                     activeTab === 'ANNOUNCEMENTS'
@@ -255,7 +269,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                   <div className="w-6 flex justify-center shrink-0">
                     <Sparkles size={18} />
                   </div>
-                  <span>AI Question Parser</span>
+                  <span>Question Extractor</span>
                 </button>
                 <button
                   onClick={() => navigateTo('DASHBOARD', 'QUESTION_BANK')}
@@ -282,6 +296,19 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                     <Bell size={18} />
                   </div>
                   <span>Announcements</span>
+                </button>
+                <button
+                  onClick={() => navigateTo('DASHBOARD', 'ITEM_ANALYSIS')}
+                  className={`w-full flex items-center gap-4 px-4 py-3 rounded-xl transition-all font-bold text-sm ${
+                    activeTab === 'ITEM_ANALYSIS'
+                      ? 'bg-[#065f46] text-[#facc15] shadow-lg'
+                      : 'hover:bg-blue-800/50 text-blue-100'
+                  }`}
+                >
+                  <div className="w-6 flex justify-center shrink-0">
+                    <BarChart3 size={18} />
+                  </div>
+                  <span>Item Analysis</span>
                 </button>
                 <button
                   onClick={() => navigateTo('DASHBOARD', 'LEADERBOARD')}

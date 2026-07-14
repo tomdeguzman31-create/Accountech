@@ -599,6 +599,28 @@ export async function facultyInstructionalReport(req: Request, res: Response): P
         )
       : 0;
 
+  const questionMetrics = await DrillResponseModel.aggregate<{
+    questionId: string;
+    attempts: number;
+    correct: number;
+  }>([
+    {
+      $group: {
+        _id: '$questionId',
+        attempts: { $sum: 1 },
+        correct: { $sum: { $cond: ['$isCorrect', 1, 0] } },
+      },
+    },
+    {
+      $project: {
+        _id: 0,
+        questionId: { $toString: '$_id' },
+        attempts: 1,
+        correct: 1,
+      },
+    },
+  ]);
+
   res.json({
     generatedAt: new Date().toISOString(),
     thresholds: { atRiskAccuracyBelow: AT_RISK_ACCURACY_BELOW, atRiskCompletionBelow: AT_RISK_COMPLETION_BELOW },
@@ -611,6 +633,7 @@ export async function facultyInstructionalReport(req: Request, res: Response): P
     atRiskStudents,
     topicMastery,
     topLeaderboard,
+    questionMetrics,
     studentProgressSchema: {
       collection: 'studentprogress',
       fields: {
@@ -627,6 +650,7 @@ export async function facultyInstructionalReport(req: Request, res: Response): P
     },
   });
 }
+
 
 export async function leaderboard(req: Request, res: Response): Promise<void> {
   const role = req.user?.role;
@@ -822,3 +846,74 @@ export async function leaderboard(req: Request, res: Response): Promise<void> {
     items: ranked,
   });
 }
+
+export async function studentHistory(req: Request, res: Response): Promise<void> {
+  if (req.user?.role !== 'FACULTY' && req.user?.role !== 'ADMIN') {
+    throw new ApiError(403, 'Unauthorized access');
+  }
+
+  const { studentId } = req.params;
+  if (!studentId) {
+    throw new ApiError(400, 'studentId parameter is required');
+  }
+
+  const allowed = await AllowedStudentModel.findOne({ studentId }).lean();
+  if (!allowed) {
+    throw new ApiError(404, 'Student not found in whitelist');
+  }
+
+  const sessions = await DrillSessionModel.find({ studentId })
+    .populate('subjectId', 'code name')
+    .sort({ takenAt: -1 })
+    .lean();
+
+  const summaryRows = await DrillSessionModel.aggregate<{
+    overallAccuracy: number;
+    totalSessions: number;
+    passedSessions: number;
+  }>([
+    { $match: { studentId } },
+    {
+      $group: {
+        _id: null,
+        overallAccuracy: { $avg: '$accuracyPercentage' },
+        totalSessions: { $sum: 1 },
+        passedSessions: {
+          $sum: {
+            $cond: [{ $gte: ['$accuracyPercentage', 75] }, 1, 0],
+          },
+        },
+      },
+    },
+    {
+      $project: {
+        _id: 0,
+        overallAccuracy: { $round: ['$overallAccuracy', 2] },
+        totalSessions: 1,
+        passedSessions: 1,
+      },
+    },
+  ]);
+
+  const userRecord = await UserModel.findOne({ studentId, role: 'STUDENT' }, { name: 1, email: 1 }).lean();
+
+  res.json({
+    studentId,
+    name: userRecord?.name ?? allowed.studentId,
+    email: userRecord?.email ?? allowed.phinmaEmail,
+    section: allowed.section ?? 'N/A',
+    department: allowed.department ?? 'N/A',
+    summary: summaryRows[0] ?? { overallAccuracy: 0, totalSessions: 0, passedSessions: 0 },
+    sessions: sessions.map((ds) => ({
+      id: ds._id.toString(),
+      subjectId: (ds.subjectId as { _id: { toString(): string } })?._id?.toString() ?? '',
+      subjectCode: (ds.subjectId as { code: string })?.code ?? '',
+      subjectName: (ds.subjectId as { name: string })?.name ?? '',
+      score: ds.score,
+      totalQuestions: ds.totalQ,
+      accuracyPercentage: ds.accuracyPercentage,
+      takenAt: ds.takenAt,
+    })),
+  });
+}
+

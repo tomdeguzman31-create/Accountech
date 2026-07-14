@@ -1,1109 +1,1654 @@
-
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { 
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
-  PieChart, Pie, RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis,
-  LineChart, Line, AreaChart, Area
-} from 'recharts';
-import { READINESS_DATA, COLORS, DEMO_USERS, MOCK_SUBJECTS } from '../constants';
-import { 
-  TrendingUp, Users, BookOpen, Target, Settings, Plus, Edit2, Trash2, X, 
-  UserPlus, Shield, AlertCircle, Save, Layers, Award, ToggleLeft, 
-  ToggleRight, Eye, EyeOff, Search, CheckCircle2, MinusCircle,
-  Activity, PieChart as PieIcon, BarChart3, Calendar as CalendarIcon, Download, Calendar,
-  Bell, Trophy, Megaphone, Send, Medal
-} from 'lucide-react';
-import { DifficultyTier, UserRole, Subject } from '../types';
-import { useAuth } from '../App';
-import { Skeleton, DashboardSkeleton, TableSkeleton } from '../components/Skeleton';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
-  adminApi,
-  announcementApi,
-  leaderboardApi,
-  questionApi,
-  studentApi,
-  subjectApi,
-  type AdminReadinessReport,
-  type Announcement,
-  type LeaderboardEntry,
+	Activity,
+	ArrowUpRight,
+	BarChart3,
+	BookOpen,
+	ChevronDown,
+	CalendarDays,
+	Download,
+	Gauge,
+	Plus,
+	PencilLine,
+	Search,
+	Layers3,
+	X,
+	Radar,
+	ShieldCheck,
+	Target,
+	TrendingUp,
+	Trophy,
+	Users,
+} from 'lucide-react';
+import {
+	Area,
+	AreaChart,
+	Bar,
+	BarChart,
+	CartesianGrid,
+	Cell,
+	Legend,
+	Line,
+	LineChart,
+	Pie,
+	PieChart,
+	PolarAngleAxis,
+	PolarGrid,
+	PolarRadiusAxis,
+	Radar as RadarSeries,
+	RadarChart,
+	ResponsiveContainer,
+	Tooltip,
+	XAxis,
+	YAxis,
+} from 'recharts';
+import { useAuth } from '../App';
+import { COLORS, DEMO_USERS, INITIAL_DIFFICULTY_TIERS, MOCK_SUBJECTS, READINESS_DATA } from '../constants';
+import { UserRole } from '../types';
+import {
+        adminApi,
+        analyticsApi,
+        leaderboardApi,
+        questionApi,
+        studentApi,
+        subjectApi,
+        type AdminReadinessReport,
+        type FacultyRosterReadinessRow,
+        type LeaderboardEntry,
 } from '../services/api';
 
+type StatCardProps = {
+	label: string;
+	value: string | number;
+	icon: React.ComponentType<{ size?: number; className?: string }>;
+	iconBg: string;
+	iconColor: string;
+};
+
+const StatCard: React.FC<StatCardProps> = ({ label, value, icon: Icon, iconBg, iconColor }) => (
+	<div className="rounded-[1.4rem] border border-slate-200 bg-white p-5 shadow-[0_10px_30px_rgba(15,23,42,0.05)]">
+		<div className="flex items-start justify-between gap-3">
+			<div>
+				<p className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-400">{label}</p>
+				<p className="mt-1 text-2xl font-black tracking-tight text-slate-900">{value}</p>
+			</div>
+			<div className="flex h-11 w-11 items-center justify-center rounded-2xl shadow-sm" style={{ backgroundColor: iconBg }}>
+				<Icon size={20} className={iconColor} />
+			</div>
+		</div>
+	</div>
+);
+
+type PanelProps = {
+	title: string;
+	subtitle?: string;
+	icon?: React.ComponentType<{ size?: number; className?: string }>;
+	action?: React.ReactNode;
+	children: React.ReactNode;
+	className?: string;
+};
+
+const Panel: React.FC<PanelProps> = ({ title, subtitle, icon: Icon, action, children, className = '' }) => (
+	<section className={`rounded-[1.45rem] border border-slate-200 bg-white p-5 shadow-[0_10px_30px_rgba(15,23,42,0.05)] ${className}`}>
+		<div className="mb-4 flex items-start justify-between gap-4">
+			<div>
+				<div className="flex items-center gap-2">
+					{Icon ? <Icon size={18} className="text-[#1e3a8a]" /> : null}
+					<h2 className="text-[15px] font-black tracking-tight text-slate-900">{title}</h2>
+				</div>
+				{subtitle ? <p className="mt-1 text-xs font-semibold leading-5 text-slate-400">{subtitle}</p> : null}
+			</div>
+			{action}
+		</div>
+		{children}
+	</section>
+);
+
+const formatPercent = (value: number) => `${value.toFixed(0)}%`;
+
+type QuestionReportRow = {
+	stem: string;
+	subject: string;
+	difficulty: string;
+	attempts: number;
+	passingRate: number;
+	status: 'IDEAL' | 'AVERAGE' | 'FOR REVIEW';
+};
+
+type StudentHistoryRow = {
+	name: string;
+	studentId: string;
+	section: string;
+	batch: string;
+	email: string;
+	accuracy: number;
+	weakestSubject: string;
+	attempts: number;
+	correct: number;
+	wrong: number;
+	performance: Array<{ week: string; score: number }>;
+        drillHistory: Array<{ subject: string; date: string; score: string; status: 'Passed' | 'Remedial' }>;
+};
+
+type AdminOverviewData = {
+        subjectAverages: Array<{
+                subjectCode?: string;
+                subjectName?: string;
+                avgAccuracy?: number;
+                totalSessions?: number;
+        }>;
+        topStudents: Array<Record<string, unknown>>;
+        engagement: {
+                totalAllowedStudents?: number;
+                registeredStudents?: number;
+                activeStudents?: number;
+        };
+};
+
 const AdminDashboard: React.FC = () => {
-  const { activeTab, token, difficultyTiers, setDifficultyTiers } = useAuth();
-  const [isLoading, setIsLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState('');
+	const { activeTab, setActiveTab } = useAuth();
+	const [showDifficultyReports, setShowDifficultyReports] = useState(false);
+	const [showAddTierModal, setShowAddTierModal] = useState(false);
+	const [showAddInstructorModal, setShowAddInstructorModal] = useState(false);
+	const [showAddSubjectModal, setShowAddSubjectModal] = useState(false);
+	const [showAddSectionModal, setShowAddSectionModal] = useState(false);
+	const [showComposeAnnouncementModal, setShowComposeAnnouncementModal] = useState(false);
+	const [leaderboardView, setLeaderboardView] = useState<'GLOBAL' | 'PASSED'>('GLOBAL');
+	const [selectedStudent, setSelectedStudent] = useState<StudentHistoryRow | null>(null);
+	const [facultySearch, setFacultySearch] = useState('');
 
-  // Announcements State
-  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
-  const [showComposeAnnouncement, setShowComposeAnnouncement] = useState(false);
-  const [newAnnouncementTitle, setNewAnnouncementTitle] = useState('');
-  const [newAnnouncementContent, setNewAnnouncementContent] = useState('');
-  const [announcementPosting, setAnnouncementPosting] = useState(false);
+	const facultyCount = DEMO_USERS.filter((user) => user.role === UserRole.FACULTY).length;
+	const studentCount = 2;
+	const questionCount = 10;
+	const passingForecast = 75;
 
-  // Leaderboard State
-  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
-  const [leaderboardLoading, setLeaderboardLoading] = useState(false);
-  const [lbSubjects, setLbSubjects] = useState<Array<{ id: string; code: string; name: string }>>([]);
-  const [lbSubjectId, setLbSubjectId] = useState('');
-  const [lbDifficulty, setLbDifficulty] = useState('');
-  const [lbDateFrom, setLbDateFrom] = useState('');
-  const [lbDateTo, setLbDateTo] = useState('');
-  
-  // Difficulty Tiers State
-  const [editingTier, setEditingTier] = useState<DifficultyTier | null>(null);
-  const [showAddTierModal, setShowAddTierModal] = useState(false);
-  const [newTier, setNewTier] = useState<Partial<DifficultyTier>>({ name: '', description: '', weight: 1 });
-  
-  // Subjects State
-  const [subjects, setSubjects] = useState<Subject[]>(MOCK_SUBJECTS);
-  const [editingSubId, setEditingSubId] = useState<string | null>(null);
-  const [editSubData, setEditSubData] = useState<Subject | null>(null);
-  const [newSub, setNewSub] = useState<Partial<Subject>>({ code: '', name: '' });
-  const [showAddSub, setShowAddSub] = useState(false);
+	const stats = useMemo(
+		() => [
+			{ label: 'Total Faculty', value: facultyCount, icon: Users, iconBg: '#eef2ff', iconColor: 'text-[#3652a3]' },
+			{ label: 'Total Students', value: studentCount, icon: Target, iconBg: '#e8f7ef', iconColor: 'text-[#0f9d58]' },
+			{ label: 'Question Bank', value: questionCount, icon: BookOpen, iconBg: '#f5e9ff', iconColor: 'text-[#9b4ed8]' },
+			{ label: 'Passing Forecast', value: `${passingForecast}%`, icon: TrendingUp, iconBg: '#fff3cd', iconColor: 'text-[#d7a400]' },
+		],
+		[facultyCount, studentCount, questionCount, passingForecast],
+	);
 
-  // Faculty Management State
-  const [facultyList, setFacultyList] = useState(DEMO_USERS.filter(u => u.role === UserRole.FACULTY).map(u => ({ ...u, isActive: true, id: Math.random().toString(36).substr(2, 9), isActivated: true })));
-  const [showAddFaculty, setShowAddFaculty] = useState(false);
-  const [newFaculty, setNewFaculty] = useState({ name: '', email: '' });
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
-  const [totalStudentsCount, setTotalStudentsCount] = useState(0);
-  const [questionBankCount, setQuestionBankCount] = useState(0);
-  const [adminReadinessReport, setAdminReadinessReport] = useState<AdminReadinessReport | null>(null);
+	const trendData = [
+		{ year: '2022', passingLikelihood: 0, averageAccuracy: 0 },
+		{ year: '2023', passingLikelihood: 0, averageAccuracy: 0 },
+		{ year: '2024', passingLikelihood: 0, averageAccuracy: 0 },
+		{ year: '2026(Current)', passingLikelihood: 70, averageAccuracy: 50 },
+	];
 
-  const getRankBadgeClasses = (rank: number): string => {
-    if (rank === 1) return 'bg-amber-100 text-amber-700 border-amber-200';
-    if (rank === 2) return 'bg-slate-200 text-slate-700 border-slate-300';
-    if (rank === 3) return 'bg-orange-100 text-orange-700 border-orange-200';
-    return 'bg-slate-50 text-slate-600 border-slate-200';
-  };
+	const radarData = [
+		{ subject: 'FAR', value: 82 },
+		{ subject: 'TAX', value: 74 },
+		{ subject: 'AUD', value: 60 },
+		{ subject: 'MAS', value: 68 },
+		{ subject: 'RFBT', value: 56 },
+		{ subject: 'AFAR', value: 78 },
+	];
 
-  // Reset search when tab changes
-  useEffect(() => {
-    setSearchTerm('');
-    setIsLoading(true);
-    const timer = setTimeout(() => setIsLoading(false), 800);
-    return () => clearTimeout(timer);
-  }, [activeTab]);
+	const weeklyEngagement = [
+		{ day: 'Mon', value: 450 },
+		{ day: 'Tue', value: 540 },
+		{ day: 'Wed', value: 520 },
+		{ day: 'Thu', value: 640 },
+		{ day: 'Fri', value: 610 },
+		{ day: 'Sat', value: 330 },
+		{ day: 'Sun', value: 260 },
+	];
 
-  useEffect(() => {
-    if (!token) return;
-    if (activeTab === 'ANNOUNCEMENTS') {
-      announcementApi.list(token).then(setAnnouncements).catch(() => {});
-    }
-  }, [activeTab, token]);
+	const facultyEfficiency = [
+		{ name: 'Faculty 1', score: 75, risk: false },
+		{ name: 'Faculty 2', score: 42, risk: true },
+		{ name: 'Faculty 3', score: 75, risk: false },
+		{ name: 'Faculty 4', score: 42, risk: true },
+		{ name: 'Faculty 5', score: 75, risk: false },
+	];
 
-  useEffect(() => {
-    if (!token || activeTab !== 'ANALYTICS') return;
+	const questionBankAnalysis = [
+		{ code: 'FAR', score: 85, color: '#3652a3' },
+		{ code: 'TAX', score: 60, color: '#3652a3' },
+		{ code: 'AUD', score: 40, color: '#3652a3' },
+		{ code: 'AFAR', score: 39, color: '#d6a11e' },
+		{ code: 'MAS', score: 20, color: '#f97316' },
+		{ code: 'RFBT', score: 19, color: '#ef4444' },
+	];
 
-    studentApi
-      .list(token)
-      .then((rows) => setTotalStudentsCount(rows.length))
-      .catch(() => setTotalStudentsCount(0));
+	const subjectEfficiency = [
+		{ code: 'TAX', blue: 75, red: 42 },
+		{ code: 'AUD', blue: 75, red: 42 },
+		{ code: 'MAS', blue: 75, red: 42 },
+		{ code: 'FAR', blue: 75, red: 42 },
+		{ code: 'AFAR', blue: 75, red: 42 },
+	];
 
-    questionApi
-      .list(token)
-      .then((rows) => setQuestionBankCount(rows.length))
-      .catch(() => setQuestionBankCount(0));
+	const sectionReadiness = [
+		{ code: 'BSBA - M1', blue: 75, red: 42 },
+		{ code: 'BSBA - M2', blue: 75, red: 42 },
+		{ code: 'BSBA - M3', blue: 75, red: 42 },
+		{ code: 'BSBA - M4', blue: 75, red: 42 },
+		{ code: 'BSBA - M5', blue: 75, red: 42 },
+	];
 
-    adminApi
-      .readinessReport(token)
-      .then(setAdminReadinessReport)
-      .catch(() => setAdminReadinessReport(null));
-  }, [activeTab, token]);
+	const gaugeData = [
+		{ name: 'Passing', value: 50 },
+		{ name: 'Remaining', value: 50 },
+	];
 
-  useEffect(() => {
-    if (!token || activeTab !== 'LEADERBOARD') return;
-    setLeaderboardLoading(true);
-    if (!lbSubjects.length) subjectApi.list(token).then(setLbSubjects).catch(() => {});
-    leaderboardApi.get(token, {
-      subjectId: lbSubjectId || undefined,
-      difficulty: lbDifficulty || undefined,
-      dateFrom: lbDateFrom || undefined,
-      dateTo: lbDateTo || undefined,
-    }).then(setLeaderboard).catch(() => {}).finally(() => setLeaderboardLoading(false));
-  }, [activeTab, token, lbSubjectId, lbDifficulty, lbDateFrom, lbDateTo]);
+	const students: StudentHistoryRow[] = [
+		{
+			name: 'Student Name',
+			studentId: '01-1234-123456',
+			section: 'South-1',
+			batch: '2024',
+			email: 'student@phinmaed.com',
+			accuracy: 50,
+			weakestSubject: 'AUD',
+			attempts: 10,
+			correct: 5,
+			wrong: 5,
+			performance: [
+				{ week: 'Week 1', score: 30 },
+				{ week: 'Week 2', score: 42 },
+				{ week: 'Week 3', score: 58 },
+				{ week: 'Week 4', score: 81 },
+				{ week: 'Week 5', score: 77 },
+				{ week: 'Week 6', score: 72 },
+			],
+			drillHistory: [
+				{ subject: 'FAR', date: 'Jun 28, 2026', score: '78%', status: 'Passed' },
+				{ subject: 'AUD', date: 'Jun 24, 2026', score: '52%', status: 'Remedial' },
+				{ subject: 'TAX', date: 'Jun 20, 2026', score: '69%', status: 'Passed' },
+			],
+		},
+		{
+			name: 'Student Name',
+			studentId: '01-2222-999999',
+			section: 'North-2',
+			batch: '2024',
+			email: 'student@phinmaed.com',
+			accuracy: 80,
+			weakestSubject: 'TAX',
+			attempts: 12,
+			correct: 10,
+			wrong: 2,
+			performance: [
+				{ week: 'Week 1', score: 41 },
+				{ week: 'Week 2', score: 50 },
+				{ week: 'Week 3', score: 61 },
+				{ week: 'Week 4', score: 74 },
+				{ week: 'Week 5', score: 81 },
+				{ week: 'Week 6', score: 84 },
+			],
+			drillHistory: [
+				{ subject: 'MAS', date: 'Jun 29, 2026', score: '84%', status: 'Passed' },
+				{ subject: 'TAX', date: 'Jun 25, 2026', score: '77%', status: 'Passed' },
+				{ subject: 'AUD', date: 'Jun 18, 2026', score: '73%', status: 'Passed' },
+			],
+		},
+		{
+			name: 'Student Name',
+			studentId: '01-3333-888888',
+			section: 'East-3',
+			batch: '2024',
+			email: 'student@phinmaed.com',
+			accuracy: 39,
+			weakestSubject: 'MAS',
+			attempts: 8,
+			correct: 3,
+			wrong: 5,
+			performance: [
+				{ week: 'Week 1', score: 28 },
+				{ week: 'Week 2', score: 35 },
+				{ week: 'Week 3', score: 39 },
+				{ week: 'Week 4', score: 44 },
+				{ week: 'Week 5', score: 41 },
+				{ week: 'Week 6', score: 39 },
+			],
+			drillHistory: [
+				{ subject: 'MAS', date: 'Jun 27, 2026', score: '38%', status: 'Remedial' },
+				{ subject: 'AUD', date: 'Jun 21, 2026', score: '41%', status: 'Remedial' },
+				{ subject: 'FAR', date: 'Jun 17, 2026', score: '44%', status: 'Remedial' },
+			],
+		},
+		{
+			name: 'Student Name',
+			studentId: '01-4444-777777',
+			section: 'West-4',
+			batch: '2024',
+			email: 'student@phinmaed.com',
+			accuracy: 80,
+			weakestSubject: 'FAR',
+			attempts: 11,
+			correct: 9,
+			wrong: 2,
+			performance: [
+				{ week: 'Week 1', score: 46 },
+				{ week: 'Week 2', score: 58 },
+				{ week: 'Week 3', score: 63 },
+				{ week: 'Week 4', score: 76 },
+				{ week: 'Week 5', score: 79 },
+				{ week: 'Week 6', score: 80 },
+			],
+			drillHistory: [
+				{ subject: 'FAR', date: 'Jun 30, 2026', score: '82%', status: 'Passed' },
+				{ subject: 'RFBT', date: 'Jun 23, 2026', score: '79%', status: 'Passed' },
+				{ subject: 'TAX', date: 'Jun 19, 2026', score: '75%', status: 'Passed' },
+			],
+		},
+	];
 
-  const handlePostAnnouncement = useCallback(async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!token || !newAnnouncementTitle.trim() || !newAnnouncementContent.trim()) return;
-    setAnnouncementPosting(true);
-    try {
-      await announcementApi.create(token, {
-        title: newAnnouncementTitle.trim(),
-        content: newAnnouncementContent.trim(),
-      });
-      const updated = await announcementApi.list(token);
-      setAnnouncements(updated);
-      setNewAnnouncementTitle('');
-      setNewAnnouncementContent('');
-      setShowComposeAnnouncement(false);
-    } catch {
-      // silent
-    } finally {
-      setAnnouncementPosting(false);
-    }
-  }, [token, newAnnouncementTitle, newAnnouncementContent]);
+	const getStudentStatus = (accuracy: number) => (accuracy >= 60 ? 'PASSED' : 'FAILED');
+	const facultyMembers = DEMO_USERS.filter((user) => user.role === UserRole.FACULTY);
+	const filteredFacultyMembers = facultyMembers.filter(
+		(user) =>
+			user.name.toLowerCase().includes(facultySearch.toLowerCase()) ||
+			user.email.toLowerCase().includes(facultySearch.toLowerCase()),
+	);
 
-  const handleDeleteAnnouncement = useCallback(async (id: string) => {
-    if (!token) return;
-    try {
-      await announcementApi.remove(token, id);
-      setAnnouncements((prev) => prev.filter((a) => a.id !== id));
-    } catch {
-      // silent
-    }
-  }, [token]);
+	const questionReportRows: QuestionReportRow[] = [
+		{ stem: 'Lorem ipsum dolor sit amet, consectetur adipiscing elit.', subject: 'AUD', difficulty: 'EASY', attempts: 205, passingRate: 70, status: 'IDEAL' },
+		{ stem: 'Lorem ipsum dolor sit amet, consectetur adipiscing elit.', subject: 'AFAR', difficulty: 'AVERAGE', attempts: 240, passingRate: 18, status: 'FOR REVIEW' },
+		{ stem: 'Lorem ipsum dolor sit amet, consectetur adipiscing elit.', subject: 'TAX', difficulty: 'HARD', attempts: 170, passingRate: 38, status: 'AVERAGE' },
+	];
 
-  // Filtered lists based on search
-  const filteredFaculty = useMemo(() => 
-    facultyList.filter(f => 
-      f.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-      f.email.toLowerCase().includes(searchTerm.toLowerCase())
-    ), [facultyList, searchTerm]);
+	const leaderboardRows = useMemo(
+		() =>
+			students
+				.map((student) => ({
+					student,
+					accuracy: student.accuracy,
+					sessions: student.attempts,
+				}))
+				.filter(({ accuracy }) => (leaderboardView === 'PASSED' ? accuracy >= 60 : true))
+				.sort((left, right) => right.accuracy - left.accuracy)
+				.slice(0, 4)
+				.map((entry, index) => ({
+					rank: index + 1,
+					name: entry.student.name,
+					studentId: entry.student.studentId,
+					accuracy: entry.accuracy,
+					sessions: entry.sessions,
+				})),
+			[leaderboardView, students],
+	);
 
-  const filteredTiers = useMemo(() => 
-    difficultyTiers.filter(t => 
-      t.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-      t.description.toLowerCase().includes(searchTerm.toLowerCase())
-    ), [difficultyTiers, searchTerm]);
+	const exportData = () => {
+		const rows = [
+			['Category', 'Metric', 'Value'],
+			['General', 'Total Faculty', String(facultyCount)],
+			['General', 'Total Students', String(studentCount)],
+			['General', 'Question Bank', String(questionCount)],
+			['General', 'Passing Forecast', `${passingForecast}%`],
+			...READINESS_DATA.map((entry) => ['Readiness', entry.year, `${entry.rate}%`]),
+		];
 
-  const filteredSubjects = useMemo(() => 
-    subjects.filter(s => 
-      s.code.toLowerCase().includes(searchTerm.toLowerCase()) || 
-      s.name.toLowerCase().includes(searchTerm.toLowerCase())
-    ), [subjects, searchTerm]);
+		const csvContent = `data:text/csv;charset=utf-8,${rows.map((row) => row.join(',')).join('\n')}`;
+		const link = document.createElement('a');
+		link.href = encodeURI(csvContent);
+		link.download = `admin_analytics_${new Date().toISOString().split('T')[0]}.csv`;
+		document.body.appendChild(link);
+		link.click();
+		document.body.removeChild(link);
+	};
 
-  // Difficulty Tier Handlers
-  const handleAddTier = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (newTier.name && newTier.description) {
-      const id = Math.random().toString(36).substr(2, 9);
-      setDifficultyTiers([...difficultyTiers, { 
-        id, 
-        name: newTier.name, 
-        description: newTier.description, 
-        weight: Number(newTier.weight) || 1,
-        isActive: true 
-      }]);
-      setNewTier({ name: '', description: '', weight: 1 });
-      setShowAddTierModal(false);
-    }
-  };
+	if (activeTab === 'ITEM_ANALYSIS') {
+		return (
+			<div className="space-y-6 pb-8 text-slate-900">
+				<Panel
+					title="Question Bank Analysis Metric"
+					icon={BookOpen}
+					action={
+						<div className="flex flex-wrap gap-2 text-[10px] font-black uppercase tracking-widest">
+							<span className="rounded-full bg-emerald-300 px-4 py-2 text-emerald-900">IDEAL (40%+)</span>
+							<span className="rounded-full bg-amber-300 px-4 py-2 text-amber-950">AVERAGE(20%-39%)</span>
+							<span className="rounded-full bg-red-200 px-4 py-2 text-red-700">FOR REVIEW (≤19%)</span>
+						</div>
+					}
+				>
+					<div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 md:p-4">
+						<div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+							<div className="flex items-center gap-3 rounded-xl border border-slate-300 bg-slate-100 px-4 py-3">
+								<Search size={16} className="text-slate-400" />
+								<input
+									type="text"
+									placeholder="Search by question content or topic..."
+									className="w-full bg-transparent text-sm font-semibold text-slate-600 outline-none placeholder:text-slate-400"
+								/>
+							</div>
 
-  const handleUpdateTier = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (editingTier) {
-      setDifficultyTiers(difficultyTiers.map(t => t.id === editingTier.id ? editingTier : t));
-      setEditingTier(null);
-    }
-  };
+							<div className="mt-3 grid gap-2 xl:grid-cols-[1fr_auto_auto_auto_auto]">
+								{['All Subjects', 'All Difficulties', 'All Sections'].map((label) => (
+									<button
+										key={label}
+										type="button"
+										className="flex items-center justify-between rounded-md border border-slate-300 bg-white px-3 py-2 text-[10px] font-black uppercase tracking-widest text-slate-600"
+									>
+										<span>{label}</span>
+										<ChevronDown size={14} />
+									</button>
+								))}
+								<div className="flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-[10px] font-black uppercase tracking-widest text-slate-500">
+									<CalendarDays size={12} className="text-slate-400" />
+									<span>dd/mm/yyyy</span>
+									<span className="text-slate-300">TO</span>
+									<span>dd/mm/yyyy</span>
+									<CalendarDays size={12} className="text-slate-400" />
+								</div>
+								<button type="button" className="rounded-md border border-slate-300 bg-slate-100 px-3 py-2 text-lg font-black leading-none text-slate-700">×</button>
+							</div>
+						</div>
 
-  const handleToggleTierStatus = (id: string) => {
-    setDifficultyTiers(difficultyTiers.map(t => t.id === id ? { ...t, isActive: !t.isActive } : t));
-  };
+						<div className="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+							<div className="grid grid-cols-[2.1fr_0.7fr_0.8fr_0.9fr_0.9fr_0.7fr] bg-slate-100 px-4 py-4 text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">
+								<div>Question Stem</div>
+								<div>Subject</div>
+								<div>Difficulty</div>
+								<div>Total Attempts</div>
+								<div>Passing Rate</div>
+								<div>Status</div>
+							</div>
+							<div className="divide-y divide-slate-200">
+								{questionReportRows.map((row) => (
+									<div key={`${row.subject}-${row.difficulty}`} className="grid grid-cols-[2.1fr_0.7fr_0.8fr_0.9fr_0.9fr_0.7fr] items-center px-4 py-4 text-sm">
+										<div className="pr-4 text-[13px] font-black leading-5 text-slate-900">{row.stem}</div>
+										<div>
+											<span className="rounded bg-slate-200 px-3 py-1 text-[11px] font-black text-[#3652a3]">{row.subject}</span>
+										</div>
+										<div className="text-[12px] font-black uppercase tracking-widest text-slate-900">{row.difficulty}</div>
+										<div className="text-2xl font-black tracking-tight text-[#3652a3]">{row.attempts}</div>
+										<div className="text-2xl font-black tracking-tight text-[#3652a3]">{row.passingRate}%</div>
+										<div>
+											<span
+												className={`inline-flex rounded-full px-4 py-2 text-[11px] font-black uppercase tracking-widest ${
+													row.status === 'IDEAL'
+														? 'bg-emerald-300 text-emerald-900'
+														: row.status === 'AVERAGE'
+															? 'bg-amber-300 text-amber-950'
+															: 'bg-red-200 text-red-700'
+												}`}
+											>
+												{row.status}
+											</span>
+										</div>
+									</div>
+								))}
+								{Array.from({ length: 3 }).map((_, index) => (
+									<div key={index} className="grid grid-cols-[2.1fr_0.7fr_0.8fr_0.9fr_0.9fr_0.7fr] items-center px-4 py-7 text-sm" />
+								))}
+							</div>
+							<div className="border-t border-slate-200 py-4 text-center text-sm font-black text-slate-700">&lt;&lt; 1 2 3 4 5 &gt;&gt;</div>
+						</div>
+					</div>
+				</Panel>
+			</div>
+		);
+	}
 
-  // Subject Handlers
-  const handleAddSubject = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (newSub.code && newSub.name) {
-      const id = (subjects.length + 1).toString();
-      setSubjects([...subjects, { id, code: newSub.code, name: newSub.name, isActive: true }]);
-      setNewSub({ code: '', name: '' });
-      setShowAddSub(false);
-    }
-  };
+	if (activeTab !== 'ANALYTICS') {
+		if (activeTab === 'FACULTY') {
+			return (
+				<div className="space-y-6 pb-8 text-slate-900">
+					<Panel title="Faculty Management" className="min-h-[420px]">
+						<div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+							<div className="flex w-full max-w-[420px] items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+								<Search size={16} className="text-slate-400" />
+								<input
+									type="text"
+									value={facultySearch}
+									onChange={(event) => setFacultySearch(event.target.value)}
+									placeholder="Search faculty by name or email..."
+									className="w-full bg-transparent text-sm font-semibold text-slate-700 outline-none placeholder:text-slate-400"
+								/>
+							</div>
 
-  const startEditSub = (sub: Subject) => {
-    setEditingSubId(sub.id);
-    setEditSubData({ ...sub });
-  };
+							<button
+								type="button"
+								onClick={() => setShowAddInstructorModal(true)}
+								className="inline-flex items-center gap-2 rounded-xl bg-[#3652a3] px-4 py-3 text-xs font-black uppercase tracking-[0.18em] text-white shadow-lg shadow-blue-900/15 transition-transform hover:scale-[1.01]"
+							>
+								<Plus size={16} />
+								Add Instructor
+							</button>
+						</div>
 
-  const handleToggleSubStatus = (id: string) => {
-    setSubjects(subjects.map(s => s.id === id ? { ...s, isActive: !s.isActive } : s));
-  };
+						<div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+							{filteredFacultyMembers.map((faculty) => (
+								<div key={faculty.email} className="rounded-[1.35rem] border border-slate-200 bg-white px-4 py-4 shadow-[0_8px_18px_rgba(15,23,42,0.06)]">
+									<div className="flex items-start justify-between gap-3">
+										<div className="flex items-center gap-3">
+											<div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-sm font-black text-[#3652a3] shadow-sm">
+												{faculty.name.charAt(0)}
+											</div>
+											<div>
+												<p className="text-sm font-black text-slate-900">{faculty.name}</p>
 
-  const handleSaveEditSub = () => {
-    if (editingSubId && editSubData) {
-      setSubjects(subjects.map(s => s.id === editingSubId ? editSubData : s));
-      setEditingSubId(null);
-      setEditSubData(null);
-    }
-  };
+										{showAddInstructorModal ? (
+											<div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/75 p-4 backdrop-blur-[2px]">
+												<div className="relative w-full max-w-[366px] rounded-[1.05rem] border border-slate-200 bg-white px-4 py-4 shadow-[0_24px_60px_rgba(15,23,42,0.35)] md:px-5 md:py-5">
+													<button
+														type="button"
+														onClick={() => setShowAddInstructorModal(false)}
+														className="absolute right-4 top-4 text-slate-400 transition-colors hover:text-slate-600"
+														aria-label="Close register faculty modal"
+													>
+														<X size={26} strokeWidth={1.5} />
+													</button>
 
-  // Faculty Handlers
-  const handleAddFaculty = (e: React.FormEvent) => {
-    e.preventDefault();
-    const faculty = { 
-      id: Math.random().toString(36).substr(2, 9),
-      name: newFaculty.name, 
-      email: newFaculty.email,
-      role: UserRole.FACULTY,
-      isActivated: false,
-      isActive: true
-    };
-    setFacultyList([...facultyList, faculty as any]);
-    setNewFaculty({ name: '', email: '' });
-    setShowAddFaculty(false);
-  };
+													<h3 className="pr-10 text-[15px] font-black text-[#3652a3]">Register Faculty</h3>
 
-  const handleToggleFacultyStatus = (id: string) => {
-    setFacultyList(facultyList.map(f => f.id === id ? { ...f, isActive: !f.isActive } : f));
-  };
+													<div className="mt-4 space-y-4">
+														<input
+															type="text"
+															placeholder="Full Name"
+															className="h-[46px] w-full rounded-lg border border-slate-300 bg-slate-200 px-4 text-[13px] font-bold text-slate-700 outline-none placeholder:text-slate-500"
+														/>
+														<input
+															type="email"
+															placeholder="Phinma Email"
+															className="h-[46px] w-full rounded-lg border border-slate-300 bg-slate-200 px-4 text-[13px] font-bold text-slate-700 outline-none placeholder:text-slate-500"
+														/>
+														<button
+															type="button"
+															className="flex h-[46px] w-full items-center justify-between rounded-lg border border-slate-300 bg-slate-200 px-4 text-[13px] font-bold text-slate-500"
+														>
+															<span>Assign Section</span>
+															<ChevronDown size={18} className="text-slate-900" />
+														</button>
+														<button
+															type="button"
+															className="flex h-[46px] w-full items-center justify-between rounded-lg border border-slate-300 bg-slate-200 px-4 text-[13px] font-bold text-slate-500"
+														>
+															<span>Assign Subject</span>
+															<ChevronDown size={18} className="text-slate-900" />
+														</button>
+														<button
+															type="button"
+															className="mt-4 h-[46px] w-full rounded-lg bg-[#3652a3] text-[13px] font-black text-white shadow-[0_4px_0_rgba(0,0,0,0.12)] transition-transform hover:scale-[1.01]"
+														>
+															Register Instructor
+														</button>
+													</div>
+												</div>
+											</div>
+										) : null}
+												<p className="text-[11px] font-semibold text-slate-400">{faculty.email}</p>
+											</div>
+										</div>
 
-  const stats = [
-    { label: 'Total Faculty', val: facultyList.length, icon: Users, color: COLORS.PH_BLUE },
-    { label: 'Total Students', val: totalStudentsCount.toLocaleString(), icon: Target, color: COLORS.PH_GREEN },
-    { label: 'Question Bank', val: questionBankCount.toLocaleString(), icon: BookOpen, color: '#4f46e5' },
-    {
-      label: 'Passing Forecast',
-      val: `${(adminReadinessReport?.globalReadiness.boardPassingLikelihood ?? 75).toFixed(1)}%`,
-      icon: TrendingUp,
-      color: COLORS.PH_YELLOW,
-    }
-  ];
+										<div className="flex items-center gap-3 pt-0.5">
+											<button type="button" className="text-slate-400 transition-colors hover:text-[#3652a3]" aria-label={`Edit ${faculty.name}`}>
+												<PencilLine size={16} />
+											</button>
+											<button
+												type="button"
+												className="flex h-5 w-9 items-center rounded-full border border-[#1d7a4d] bg-white px-0.5"
+												aria-label={`Toggle ${faculty.name} status`}
+											>
+												<span className="ml-auto h-3.5 w-3.5 rounded-full bg-[#1d7a4d]" />
+											</button>
+										</div>
+									</div>
+								</div>
+							))}
+						</div>
+					</Panel>
+				</div>
+			);
+		}
 
-  const historicalReadiness =
-    adminReadinessReport?.historicalTrend.map((row) => ({
-      year: row.batchLabel,
-      rate: row.passingLikelihood,
-      accuracy: row.averageAccuracy,
-      completion: row.completionRate,
-      students: row.studentCount,
-    })) ?? READINESS_DATA;
+		if (activeTab === 'DIFFICULTIES') {
+			return (
+				<div className="space-y-6 pb-8 text-slate-900">
+					<section className="relative overflow-hidden rounded-[2rem] bg-[#3652a3] px-6 py-6 text-white shadow-[0_8px_24px_rgba(15,23,42,0.18)] md:px-8 md:py-7">
+						<div className="relative z-10 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+							<div className="max-w-xl space-y-3">
+								<h1 className="text-2xl font-black tracking-tight md:text-[28px]">Difficulty Level Management</h1>
+								<p className="max-w-md text-[13px] leading-5 text-blue-100/75 md:text-[14px]">
+									Define how the adaptive engine weights specific questions based on Blooms Taxonomy and CMA complexity standards.
+								</p>
+							</div>
 
-  const facultyPerformanceOverview = adminReadinessReport?.facultyOverview ?? [];
+							<div className="flex w-full max-w-[300px] flex-col gap-3 lg:pt-1">
+								<div className="flex items-center gap-3 rounded-2xl border border-white/30 bg-[#4862a6] px-4 py-3 shadow-inner">
+									<Search size={18} className="text-white/70" />
+									<input
+										type="text"
+										placeholder="Search tiers..."
+										className="w-full bg-transparent text-[14px] font-semibold text-white outline-none placeholder:text-white/60"
+									/>
+								</div>
 
-  const gaps = [
-    { label: 'FAR', score: 85, color: '#10b981' },
-    { label: 'TAX', score: 64, color: COLORS.PH_YELLOW },
-    { label: 'AUD', score: 45, color: '#ef4444' }
-  ];
+								<button
+									type="button"
+									onClick={() => setShowAddTierModal(true)}
+									className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl bg-[#f5c842] px-5 text-[15px] font-black text-[#1d7a4d] shadow-[0_6px_0_rgba(0,0,0,0.12)] transition-transform hover:translate-y-0.5"
+								>
+									<Plus size={18} />
+									New Tier
+								</button>
+							</div>
+						</div>
 
-  const userDistribution = [
-    { name: 'Students', value: totalStudentsCount, color: COLORS.PH_BLUE },
-    { name: 'Faculty', value: facultyList.length, color: COLORS.PH_YELLOW },
-  ];
+						<div className="absolute right-4 top-3 h-28 w-28 rounded-full border-[10px] border-white/10" />
+						<div className="absolute right-12 top-7 h-20 w-20 rounded-full border-[10px] border-white/10" />
+					</section>
 
-  const subjectPerformance = [
-    { subject: 'FAR', average: 78, target: 85 },
-    { subject: 'TAX', average: 65, target: 85 },
-    { subject: 'AUD', average: 58, target: 85 },
-    { subject: 'MAS', average: 82, target: 85 },
-    { subject: 'RFBT', average: 71, target: 85 },
-    { subject: 'AFAR', average: 62, target: 85 },
-  ];
+					<div className="grid gap-6 pt-2 md:grid-cols-2">
+						{INITIAL_DIFFICULTY_TIERS.map((tier) => {
+							const influence = `${tier.weight}x`;
+							const fillCount = tier.weight;
+							return (
+								<div
+									key={tier.id}
+									className="overflow-hidden rounded-[1.8rem] border border-slate-200 bg-white shadow-[0_8px_20px_rgba(15,23,42,0.08)]"
+								>
+									<div className="flex items-start justify-between px-5 pt-5">
+										<div className="rounded-xl bg-[#d7e5f2] px-3 py-2 text-[17px] font-black text-[#3652a3] shadow-sm">{influence}</div>
+										<div className="flex items-center gap-3 text-slate-400">
+											<PencilLine size={15} />
+											<button type="button" className="flex h-5 w-9 items-center rounded-full border border-[#1d7a4d] bg-white px-0.5" aria-label={`Toggle ${tier.name}`}>
+												<span className="ml-auto h-3.5 w-3.5 rounded-full bg-[#1d7a4d]" />
+											</button>
+										</div>
+									</div>
 
-  const activityData = [
-    { day: 'Mon', active: 450 },
-    { day: 'Tue', active: 520 },
-    { day: 'Wed', active: 480 },
-    { day: 'Thu', active: 610 },
-    { day: 'Fri', active: 590 },
-    { day: 'Sat', active: 320 },
-    { day: 'Sun', active: 280 },
-  ];
+									<div className="px-8 pt-8 pb-6">
+										<h3 className="text-[18px] font-black text-slate-900">{tier.name}</h3>
+										<p className="mt-1.5 text-[13px] leading-5 text-slate-400">{tier.description}</p>
+									</div>
 
-  const difficultyDist = difficultyTiers.map(t => ({
-    name: t.name,
-    count: Math.floor(Math.random() * 3000) + 1000,
-    weight: t.weight
-  }));
+									<div className="flex items-center justify-between border-t border-slate-200 px-6 py-4 text-[11px] font-black uppercase tracking-[0.16em] text-slate-300">
+										<span>Adaptive Influence</span>
+										<div className="flex items-center gap-1.5">
+											{Array.from({ length: 5 }).map((_, index) => (
+												<span
+													key={index}
+													className={`h-2 w-2 rounded-full ${index < fillCount ? 'bg-[#f5c842]' : 'bg-slate-300'}`}
+												/>
+											))}
+										</div>
+									</div>
+								</div>
+							);
+						})}
+					</div>
 
-  const downloadAdminAnalytics = () => {
-    let csvContent = "data:text/csv;charset=utf-8,";
-    
-    if (activeTab === 'FACULTY') {
-      csvContent += "Name,Email,Role,Status\n";
-      facultyList.forEach(f => {
-        csvContent += `${f.name},${f.email},${f.role},${f.isActive ? 'Active' : 'Inactive'}\n`;
-      });
-    } else if (activeTab === 'DIFFICULTIES') {
-      csvContent += "Name,Weight,Description,Status\n";
-      difficultyTiers.forEach(t => {
-        csvContent += `${t.name},${t.weight},${t.description.replace(/,/g, ';')},${t.isActive ? 'Active' : 'Inactive'}\n`;
-      });
-    } else if (activeTab === 'STRATEGIC') {
-      csvContent += "Code,Name,Status\n";
-      subjects.forEach(s => {
-        csvContent += `${s.code},${s.name},${s.isActive ? 'Active' : 'Inactive'}\n`;
-      });
-    } else {
-      // Analytics Tab
-      csvContent += "Category,Metric,Value\n";
-      if (startDate || endDate) {
-        csvContent += `Filter,Date Range,${startDate || 'N/A'} to ${endDate || 'N/A'}\n`;
-      }
-      stats.forEach(s => csvContent += `General,${s.label},${s.val}\n`);
-      READINESS_DATA.forEach(d => csvContent += `Readiness,${d.year},${d.rate}%\n`);
-      subjectPerformance.forEach(p => csvContent += `Performance,${p.subject},${p.average}% (Target: ${p.target}%)\n`);
-      activityData.forEach(a => csvContent += `Engagement,${a.day},${a.active} active users\n`);
-    }
+					{showAddTierModal ? (
+						<div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/75 p-4 backdrop-blur-sm">
+							<div className="relative w-full max-w-[365px] rounded-[1.1rem] border border-slate-200 bg-white px-4 py-4 shadow-2xl md:px-5 md:py-5">
+								<button
+									type="button"
+									onClick={() => setShowAddTierModal(false)}
+									className="absolute right-4 top-4 text-slate-400 transition-colors hover:text-slate-600"
+									aria-label="Close new difficulty tier modal"
+								>
+									<X size={26} strokeWidth={1.5} />
+								</button>
 
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `admin_analytics_${activeTab.toLowerCase()}_${new Date().toISOString().split('T')[0]}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
+								<div className="flex items-center gap-2 pr-10">
+									<div className="flex h-6 w-6 items-center justify-center rounded-md bg-[#fbe49a] text-[#1d7a4d] shadow-sm">
+										<Layers3 size={14} />
+									</div>
+									<h3 className="text-[15px] font-black text-[#3652a3]">New Difficulty Tier</h3>
+								</div>
 
-  if (isLoading) {
-    return <DashboardSkeleton />;
-  }
+								<div className="mt-4 space-y-5">
+									<div className="space-y-2">
+										<label className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Tier Name</label>
+										<input
+											type="text"
+											placeholder="e.g., Professional Evaluation"
+											className="h-10 w-full rounded-lg border border-slate-300 bg-slate-200 px-4 text-[13px] font-bold text-slate-700 outline-none placeholder:text-slate-500"
+										/>
+									</div>
 
-  return (
-    <div className="space-y-8 animate-in fade-in duration-500">
-      <div className="flex flex-col md:flex-row justify-between items-center gap-6">
-        {activeTab === 'ANALYTICS' && (
-          <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
-            <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-xl px-3 py-2 shadow-sm">
-              <Calendar size={14} className="text-slate-400" />
-              <input 
-                type="date" 
-                className="text-[11px] font-bold text-slate-600 outline-none bg-transparent"
-                value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-              />
-              <span className="text-slate-300 text-[10px] font-black">TO</span>
-              <input 
-                type="date" 
-                className="text-[11px] font-bold text-slate-600 outline-none bg-transparent"
-                value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
-              />
-              {(startDate || endDate) && (
-                <button onClick={() => { setStartDate(''); setEndDate(''); }} className="text-slate-400 hover:text-red-500 transition-colors">
-                  <X size={14} />
-                </button>
-              )}
-            </div>
+									<div className="space-y-2">
+										<label className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Drill Level</label>
+										<div className="relative">
+											<input
+												type="number"
+												defaultValue={1}
+												className="h-11 w-full rounded-lg border border-slate-300 bg-slate-200 px-4 text-[13px] font-bold text-slate-700 outline-none [appearance:textfield]"
+											/>
+											<div className="pointer-events-none absolute inset-y-0 right-3 flex flex-col items-center justify-center text-slate-500">
+												<span className="-mb-1 text-[8px] leading-none">▲</span>
+												<span className="text-[8px] leading-none">▼</span>
+											</div>
+										</div>
+									</div>
 
-            <button 
-              onClick={downloadAdminAnalytics}
-              className="flex items-center gap-2 px-4 py-2 bg-[#1e3a8a] text-white rounded-xl text-xs font-bold hover:bg-blue-800 transition-all shadow-md"
-            >
-              <Download size={14} />
-              Export Data
-            </button>
-          </div>
-        )}
-      </div>
+									<div className="space-y-2">
+										<label className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Description</label>
+										<textarea
+											rows={4}
+											defaultValue="Lorem ipsum dolor sit amet, consectetur adipiscing elit. Nunc vulputate libero et velit interdum, ac aliquet odio mattis."
+											className="w-full rounded-lg border border-slate-300 bg-slate-200 px-4 py-3 text-[12px] font-bold leading-5 text-slate-700 outline-none placeholder:text-slate-500"
+										/>
+									</div>
 
-      {activeTab === 'ANALYTICS' && (
-        <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2">
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-6">
-            {stats.map((stat, i) => (
-              <div key={i} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between group hover:shadow-md transition-shadow">
-                <div>
-                  <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{stat.label}</p>
-                  <h3 className="text-2xl font-black mt-1 text-slate-800">{stat.val}</h3>
-                </div>
-                <div className="w-12 h-12 rounded-xl flex items-center justify-center transition-transform group-hover:scale-110" style={{ backgroundColor: `${stat.color}15`, color: stat.color }}>
-                  <stat.icon size={24} />
-                </div>
-              </div>
-            ))}
-          </div>
+									<button
+										type="button"
+										className="mt-1 h-11 w-full rounded-lg bg-[#3652a3] text-[13px] font-black text-white shadow-md transition-transform hover:scale-[1.01]"
+									>
+										Deploy New Difficulty Tier
+									</button>
+								</div>
+							</div>
+						</div>
+					) : null}
+				</div>
+			);
+		}
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            <div className="lg:col-span-2 bg-white p-8 rounded-2xl shadow-sm border border-gray-100">
-              <div className="flex items-center justify-between mb-10">
-                <div>
-                  <h3 className="text-xl font-black text-slate-800 tracking-tight">Historical Trend Line</h3>
-                  <p className="text-sm text-gray-500 mt-1">Accuracy and passing likelihood for 2022, 2023, 2024, and current batch</p>
-                </div>
-                <button
-                  className="px-3 py-1.5 text-[10px] font-black rounded-lg bg-[#1e3a8a] text-white"
-                  onClick={downloadAdminAnalytics}
-                >
-                  Download CSV
-                </button>
-              </div>
+		if (activeTab === 'STRATEGIC') {
+			return (
+				<div className="space-y-6 pb-8 text-slate-900">
+					<section className="rounded-[2rem] border border-slate-200 bg-white p-5 shadow-[0_8px_24px_rgba(15,23,42,0.08)] md:p-6">
+						<div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+							<div className="flex items-start gap-3">
+								<div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-[#3652a3] shadow-sm">
+									<BookOpen size={20} />
+								</div>
+								<div>
+									<h1 className="text-[18px] font-black text-slate-900">Subject Management</h1>
+									<p className="text-[12px] font-semibold text-slate-400">Manage standard board exam subjects</p>
+								</div>
+							</div>
 
-              <div className="h-80">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={historicalReadiness}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                    <XAxis dataKey="year" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} dy={10} />
-                    <YAxis unit="%" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
-                    <Tooltip />
-                    <Line type="monotone" dataKey="rate" stroke="#1e3a8a" strokeWidth={3} dot={{ r: 5 }} name="Passing Likelihood" />
-                    <Line type="monotone" dataKey="accuracy" stroke="#065f46" strokeWidth={2} dot={{ r: 4 }} name="Average Accuracy" />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
+							<div className="flex w-full max-w-[430px] flex-col gap-3 lg:flex-row lg:items-center lg:justify-end">
+								<div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm lg:w-[250px]">
+									<Search size={16} className="text-slate-400" />
+									<input
+										type="text"
+										placeholder="Search curriculum by code or title..."
+										className="w-full bg-transparent text-[13px] font-semibold text-slate-700 outline-none placeholder:text-slate-400"
+									/>
+								</div>
 
-            <div className="bg-white p-8 rounded-2xl shadow-sm border border-gray-100">
-              <div className="flex items-center justify-between mb-8">
-                <div className="flex items-center gap-2">
-                  <PieIcon className="text-[#065f46]" size={20} />
-                  <h3 className="text-lg font-black text-slate-800">Global Readiness Gauge</h3>
-                </div>
-                <button
-                  className="px-3 py-1.5 text-[10px] font-black rounded-lg bg-[#065f46] text-[#facc15]"
-                  onClick={() => window.alert('PDF export placeholder. Connect to PDF service when ready.')}
-                >
-                  Download PDF
-                </button>
-              </div>
-              <div className="h-64">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={[
-                        { name: 'Ready', value: adminReadinessReport?.globalReadiness.boardPassingLikelihood ?? 0, color: '#065f46' },
-                        { name: 'Remaining', value: 100 - (adminReadinessReport?.globalReadiness.boardPassingLikelihood ?? 0), color: '#e2e8f0' },
-                      ]}
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={70}
-                      outerRadius={90}
-                      startAngle={220}
-                      endAngle={-40}
-                      dataKey="value"
-                      stroke="none"
-                    >
-                      <Cell fill="#065f46" />
-                      <Cell fill="#e2e8f0" />
-                    </Pie>
-                    <Tooltip />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-              <div className="-mt-36 text-center">
-                <p className="text-4xl font-black text-[#1e3a8a]">
-                  {(adminReadinessReport?.globalReadiness.boardPassingLikelihood ?? 0).toFixed(1)}%
-                </p>
-                <p className="text-xs font-bold text-slate-500 mt-1">Board Passing Likelihood</p>
-              </div>
-              <p className="text-[11px] text-slate-500 mt-8 leading-relaxed">
-                {adminReadinessReport?.readinessMath ?? 'Readiness formula not available yet.'}
-              </p>
-            </div>
-          </div>
+								<button
+									type="button"
+									onClick={() => setShowAddSubjectModal(true)}
+									className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-[#3652a3] px-4 text-[13px] font-black text-white shadow-[0_4px_0_rgba(0,0,0,0.1)]"
+								>
+									<Plus size={16} />
+									Add Subject
+								</button>
+							</div>
+						</div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-            <div className="bg-white p-8 rounded-2xl shadow-sm border border-gray-100">
-              <div className="flex items-center gap-2 mb-8">
-                <Target className="text-emerald-500" size={20} />
-                <h3 className="text-lg font-black text-slate-800">Subject Performance Radar</h3>
-              </div>
-              <div className="h-80">
-                <ResponsiveContainer width="100%" height="100%">
-                  <RadarChart cx="50%" cy="50%" outerRadius="80%" data={subjectPerformance}>
-                    <PolarGrid stroke="#f1f5f9" />
-                    <PolarAngleAxis dataKey="subject" tick={{fill: '#94a3b8', fontSize: 12}} />
-                    <PolarRadiusAxis angle={30} domain={[0, 100]} tick={{fill: '#94a3b8', fontSize: 10}} />
-                    <Radar
-                      name="Average Score"
-                      dataKey="average"
-                      stroke={COLORS.PH_BLUE}
-                      fill={COLORS.PH_BLUE}
-                      fillOpacity={0.6}
-                    />
-                    <Radar
-                      name="Target Score"
-                      dataKey="target"
-                      stroke={COLORS.PH_YELLOW}
-                      fill={COLORS.PH_YELLOW}
-                      fillOpacity={0.1}
-                    />
-                    <Tooltip />
-                  </RadarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
+						<div className="mt-5 grid gap-3 md:grid-cols-3">
+							{MOCK_SUBJECTS.map((subject, index) => (
+								<div key={subject.id} className="rounded-[1.4rem] bg-[#f2ecec] p-3 shadow-[0_4px_10px_rgba(15,23,42,0.05)]">
+									<div className="rounded-xl bg-[#cbe1e7] px-4 py-3 shadow-[0_4px_10px_rgba(15,23,42,0.12)]">
+										<div className="flex items-start justify-between gap-3">
+											<div>
+												<div className="inline-flex rounded-full bg-[#d7e5f2] px-2.5 py-1 text-[12px] font-black uppercase tracking-tight text-[#3652a3] shadow-sm">
+													{subject.code}
+												</div>
+												<h3 className="mt-2 text-[13px] font-black leading-5 text-slate-900">{subject.name}</h3>
+											</div>
+											{index === 0 ? (
+												<div className="flex items-center gap-3 text-slate-400">
+													<PencilLine size={14} />
+													<button type="button" className="flex h-5 w-9 items-center rounded-full border border-[#1d7a4d] bg-white px-0.5" aria-label="Toggle subject status">
+														<span className="ml-auto h-3.5 w-3.5 rounded-full bg-[#1d7a4d]" />
+													</button>
+												</div>
+											) : null}
+										</div>
+									</div>
+								</div>
+							))}
+						</div>
+					</section>
 
-            <div className="bg-white p-8 rounded-2xl shadow-sm border border-gray-100">
-              <div className="flex items-center gap-2 mb-8">
-                <Activity className="text-indigo-500" size={20} />
-                <h3 className="text-lg font-black text-slate-800">Weekly Engagement</h3>
-              </div>
-              <div className="h-80">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={activityData}>
-                    <defs>
-                      <linearGradient id="colorActive" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#4f46e5" stopOpacity={0.3}/>
-                        <stop offset="95%" stopColor="#4f46e5" stopOpacity={0}/>
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                    <XAxis dataKey="day" axisLine={false} tickLine={false} tick={{fill: '#94a3b8', fontSize: 12}} dy={10} />
-                    <YAxis axisLine={false} tickLine={false} tick={{fill: '#94a3b8', fontSize: 12}} />
-                    <Tooltip />
-                    <Area type="monotone" dataKey="active" stroke="#4f46e5" fillOpacity={1} fill="url(#colorActive)" strokeWidth={3} />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          </div>
+					{showAddSubjectModal ? (
+						<div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm">
+							<div className="relative w-full max-w-[375px] rounded-[1.1rem] border border-slate-200 bg-white px-4 py-4 shadow-2xl md:px-5 md:py-5">
+								<button
+									type="button"
+									onClick={() => setShowAddSubjectModal(false)}
+									className="absolute right-4 top-4 text-slate-400 transition-colors hover:text-slate-600"
+									aria-label="Close add subject modal"
+								>
+									<X size={26} strokeWidth={1.5} />
+								</button>
 
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-            <div className="px-6 py-5 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3">
-              <h3 className="text-lg font-black text-slate-800">Faculty Performance Overview</h3>
-              <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">
-                {facultyPerformanceOverview.length} Professor{facultyPerformanceOverview.length !== 1 ? 's' : ''}
-              </span>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm min-w-[860px]">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-slate-100">
-                    <th className="text-left px-6 py-4 text-[10px] font-black uppercase tracking-widest text-slate-400">Professor</th>
-                    <th className="text-right px-6 py-4 text-[10px] font-black uppercase tracking-widest text-slate-400">Students Handled</th>
-                    <th className="text-right px-6 py-4 text-[10px] font-black uppercase tracking-widest text-slate-400">Avg Class Readiness</th>
-                    <th className="text-right px-6 py-4 text-[10px] font-black uppercase tracking-widest text-slate-400">Total Drills Uploaded</th>
-                    <th className="text-left px-6 py-4 text-[10px] font-black uppercase tracking-widest text-slate-400">Last Activity</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {facultyPerformanceOverview.length === 0 ? (
-                    <tr>
-                      <td colSpan={5} className="px-6 py-10 text-center text-sm font-bold text-slate-400">
-                        No faculty performance data yet.
-                      </td>
-                    </tr>
-                  ) : (
-                    facultyPerformanceOverview.map((row) => (
-                      <tr key={row.facultyUserId} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
-                        <td className="px-6 py-4">
-                          <p className="font-black text-slate-800">{row.facultyName}</p>
-                          <p className="text-[11px] text-slate-400">{row.facultyEmail ?? 'No email on file'}</p>
-                        </td>
-                        <td className="px-6 py-4 text-right font-bold text-slate-700">{row.totalStudentsHandled}</td>
-                        <td className="px-6 py-4 text-right font-bold text-[#065f46]">{row.averageClassReadiness.toFixed(1)}%</td>
-                        <td className="px-6 py-4 text-right font-bold text-[#1e3a8a]">{row.totalDrillsUploaded}</td>
-                        <td className="px-6 py-4 text-xs font-semibold text-slate-600">
-                          {row.lastActivityAt ? new Date(row.lastActivityAt).toLocaleString() : 'No activity yet'}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
+								<div className="pr-10">
+									<h3 className="text-[16px] font-black text-[#3652a3]">Add New Subject</h3>
+								</div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            <div className="lg:col-span-2 bg-white p-8 rounded-2xl shadow-sm border border-gray-100">
-              <div className="flex items-center gap-2 mb-8">
-                <BarChart3 className="text-orange-500" size={20} />
-                <h3 className="text-lg font-black text-slate-800">Question Bank Distribution</h3>
-              </div>
-              <div className="h-80">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={difficultyDist} layout="vertical">
-                    <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
-                    <XAxis type="number" hide />
-                    <YAxis dataKey="name" type="category" axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 11, fontWeight: 'bold'}} width={150} />
-                    <Tooltip cursor={{fill: '#f8fafc'}} />
-                    <Bar dataKey="count" radius={[0, 8, 8, 0]} barSize={30}>
-                      {difficultyDist.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={entry.weight >= 4 ? '#ef4444' : entry.weight >= 2.5 ? COLORS.PH_YELLOW : COLORS.PH_BLUE} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
+								<div className="mt-4 space-y-4">
+									<div className="space-y-2">
+										<label className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Subject Code</label>
+										<input
+											type="text"
+											placeholder="e.g., FAR,TAX,AFAR"
+											className="h-10 w-full rounded-lg border border-slate-300 bg-slate-200 px-4 text-[13px] font-bold text-slate-700 outline-none placeholder:text-slate-500"
+										/>
+									</div>
 
-            <div className="bg-white p-8 rounded-2xl shadow-sm border border-gray-100">
-              <div className="flex items-center gap-2 mb-8">
-                <AlertCircle className="text-orange-500" size={20} />
-                <h3 className="text-lg font-black text-slate-800">Knowledge Gaps</h3>
-              </div>
-              <div className="space-y-6">
-                {gaps.map((sub, i) => (
-                  <div key={i} className="group">
-                    <div className="flex justify-between text-xs mb-2">
-                      <span className="font-black text-slate-700">{sub.label}</span>
-                      <span className="font-bold text-gray-400">{sub.score}%</span>
-                    </div>
-                    <div className="w-full bg-slate-50 rounded-full h-2 overflow-hidden">
-                      <div className="h-full rounded-full transition-all duration-1000" style={{ width: `${sub.score}%`, backgroundColor: sub.color }}></div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div className="mt-10 p-4 bg-orange-50 rounded-xl border border-orange-100">
-                <div className="flex gap-3">
-                  <AlertCircle className="text-orange-500 shrink-0" size={20} />
-                  <div>
-                    <h4 className="text-xs font-black text-orange-900 uppercase tracking-wider">Critical Alert</h4>
-                    <p className="text-[11px] text-orange-700 mt-1 leading-relaxed font-medium">
-                      AUD (Auditing) scores have dropped by 12% this week. Adaptive engine is prioritizing remedial drills for all affected students.
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+									<div className="space-y-2">
+										<label className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Subject Name</label>
+										<input
+											type="text"
+											placeholder="Full name of the board subject"
+											className="h-10 w-full rounded-lg border border-slate-300 bg-slate-200 px-4 text-[13px] font-bold text-slate-700 outline-none placeholder:text-slate-500"
+										/>
+									</div>
 
-      {activeTab === 'FACULTY' && (
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden animate-in fade-in slide-in-from-bottom-2">
-          <div className="p-8 border-b border-gray-50 flex flex-wrap gap-4 justify-between items-center bg-slate-50/30">
-            <div className="flex items-center gap-6 flex-1">
-              <h3 className="text-xl font-black text-slate-800 shrink-0">Faculty Management</h3>
-              <div className="relative max-w-sm w-full">
-                <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                <input 
-                  type="text" 
-                  placeholder="Search faculty by name or email..." 
-                  className="w-full pl-12 pr-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-[#1e3a8a] transition-all"
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                />
-              </div>
-            </div>
-            <button onClick={() => setShowAddFaculty(true)} className="bg-[#1e3a8a] text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2">
-              <UserPlus size={18} /> Add Instructor
-            </button>
-          </div>
-          <div className="p-8 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {filteredFaculty.map((faculty, i) => (
-              <div key={i} className={`p-6 border border-slate-100 rounded-2xl relative group bg-white transition-all ${!faculty.isActive ? 'grayscale opacity-60' : ''}`}>
-                <div className="flex items-center gap-4">
-                  <div className={`w-12 h-12 rounded-xl flex items-center justify-center font-black transition-colors ${faculty.isActive ? 'bg-slate-100 text-[#1e3a8a]' : 'bg-slate-100 text-slate-400'}`}>
-                    {faculty.name.charAt(0)}
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h4 className="font-black text-slate-800">{faculty.name}</h4>
-                      {!faculty.isActive && (
-                        <span className="text-[8px] px-1.5 py-0.5 bg-slate-100 text-slate-400 rounded-full font-black uppercase tracking-widest">Disabled</span>
-                      )}
-                    </div>
-                    <p className="text-xs text-gray-400">{faculty.email}</p>
-                  </div>
-                </div>
-                <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button 
-                    onClick={() => handleToggleFacultyStatus(faculty.id)} 
-                    className={`p-2 rounded-lg transition-all duration-300 ${faculty.isActive ? 'text-[#065f46] hover:bg-emerald-50' : 'text-slate-300 hover:bg-slate-50'}`}
-                    title={faculty.isActive ? "Deactivate Instructor" : "Activate Instructor"}
-                  >
-                    {faculty.isActive ? <ToggleRight size={22} /> : <ToggleLeft size={22} />}
-                  </button>
-                </div>
-              </div>
-            ))}
-            {filteredFaculty.length === 0 && (
-              <div className="col-span-full py-12 text-center text-slate-400 font-medium">
-                No faculty found matching "{searchTerm}"
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+									<button
+										type="button"
+										className="h-11 w-full rounded-lg bg-[#1d7a4d] text-[13px] font-black text-white shadow-md transition-transform hover:scale-[1.01]"
+									>
+										Create Subject Entry
+									</button>
+								</div>
+							</div>
+						</div>
+					) : null}
 
-      {activeTab === 'DIFFICULTIES' && (
-        <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2">
-          <div className="bg-[#1e3a8a] p-6 md:p-10 rounded-3xl md:rounded-[2.5rem] text-white flex flex-col md:flex-row justify-between items-center gap-8 shadow-2xl relative overflow-hidden">
-             <div className="absolute top-0 right-0 p-4 opacity-10">
-               <Layers size={140} />
-             </div>
-             <div className="relative z-10 space-y-2">
-               <h3 className="text-3xl font-black tracking-tight">Difficulty Level Management</h3>
-               <p className="text-blue-200 max-w-lg">Define how the Difficulty levels of specific questions based on Blooms Taxonomy and CMA complexity standards.</p>
-             </div>
-             <div className="flex flex-col gap-4 relative z-10 min-w-[300px]">
-                <div className="relative">
-                  <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-blue-300" size={18} />
-                  <input 
-                    type="text" 
-                    placeholder="Search tiers..." 
-                    className="w-full pl-12 pr-4 py-3 bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#facc15] transition-all text-white placeholder:text-blue-200"
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                  />
-                </div>
-                <button onClick={() => setShowAddTierModal(true)} className="bg-[#facc15] text-[#065f46] px-8 py-4 rounded-2xl font-black flex items-center justify-center gap-2 shadow-xl hover:scale-105 transition-all active:scale-95">
-                  <Plus size={20} /> New Tier
-                </button>
-             </div>
-          </div>
+					{showAddSectionModal ? (
+									<div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm">
+										<div className="relative w-full max-w-[375px] rounded-[1.1rem] border border-slate-200 bg-white px-4 py-4 shadow-2xl md:px-5 md:py-5">
+											<button
+												type="button"
+												onClick={() => setShowAddSectionModal(false)}
+												className="absolute right-4 top-4 text-slate-400 transition-colors hover:text-slate-600"
+												aria-label="Close add sections modal"
+											>
+												<X size={26} strokeWidth={1.5} />
+											</button>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-            {filteredTiers.map((tier) => (
-              <div key={tier.id} className={`bg-white rounded-[2rem] border border-slate-100 shadow-sm overflow-hidden flex flex-col group hover:shadow-xl hover:border-blue-100 transition-all ${!tier.isActive ? 'grayscale opacity-60' : ''}`}>
-                <div className="p-8 flex-1 space-y-5">
-                  <div className="flex justify-between items-start">
-                    <div className={`w-14 h-14 rounded-2xl flex items-center justify-center font-black text-xl shadow-sm transition-all duration-300 ${tier.isActive ? 'text-[#1e3a8a] bg-blue-50' : 'text-slate-400 bg-slate-100'}`}>
-                      {tier.weight}x
-                    </div>
-                    <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button onClick={() => setEditingTier({...tier})} className="p-2 text-slate-400 hover:text-[#1e3a8a] hover:bg-blue-50 rounded-lg transition-colors"><Edit2 size={16} /></button>
-                      <button 
-                        onClick={() => handleToggleTierStatus(tier.id)} 
-                        className={`p-2 rounded-lg transition-all duration-300 ${tier.isActive ? 'text-slate-400 hover:text-[#1e3a8a] hover:bg-blue-50' : 'text-[#065f46] hover:bg-emerald-50'}`}
-                        title={tier.isActive ? "Deactivate Tier" : "Activate Tier"}
-                      >
-                        {tier.isActive ? <ToggleRight size={22} className="text-[#065f46]" /> : <ToggleLeft size={22} className="text-slate-300" />}
-                      </button>
-                    </div>
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h4 className="text-xl font-black text-slate-800 leading-tight">{tier.name}</h4>
-                      {!tier.isActive && (
-                        <span className="text-[9px] px-2 py-0.5 bg-slate-100 text-slate-400 rounded-full font-black uppercase tracking-widest">Inactive</span>
-                      )}
-                    </div>
-                    <p className="text-sm text-slate-500 mt-3 leading-relaxed">{tier.description}</p>
-                  </div>
-                </div>
-                <div className="px-8 py-5 bg-slate-50 border-t border-slate-100 flex items-center justify-between">
-                   <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Adaptive Influence</span>
-                   <div className="flex gap-1">
-                     {[...Array(5)].map((_, i) => (
-                       <div key={i} className={`w-2 h-2 rounded-full transition-all duration-500 ${i < tier.weight ? (tier.isActive ? 'bg-[#facc15]' : 'bg-slate-300') : 'bg-slate-200'}`}></div>
-                     ))}
-                   </div>
-                </div>
-              </div>
-            ))}
-            {filteredTiers.length === 0 && (
-              <div className="col-span-full py-20 text-center text-slate-400 font-medium">
-                No difficulty tiers found matching "{searchTerm}"
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+											<div className="pr-10">
+												<h3 className="text-[16px] font-black text-[#3652a3]">Add New Sections</h3>
+											</div>
 
-      {activeTab === 'STRATEGIC' && (
-        <div className="grid grid-cols-1 lg:grid-cols-1 gap-8 animate-in fade-in slide-in-from-bottom-2">
-          <div className="bg-white p-6 md:p-10 rounded-3xl md:rounded-[2.5rem] shadow-sm border border-gray-100">
-            <div className="flex flex-wrap justify-between items-center mb-10 gap-6">
-              <div className="flex items-center gap-3">
-                <div className="p-3 bg-blue-50 rounded-2xl text-[#1e3a8a]">
-                   <BookOpen size={24} />
-                </div>
-                <div>
-                  <h3 className="text-2xl font-black text-slate-800 tracking-tight">CPA Board Curriculum</h3>
-                  <p className="text-sm text-slate-400">Manage standard board exam subjects</p>
-                </div>
-              </div>
-              <div className="flex items-center gap-4 flex-1 max-w-2xl">
-                <div className="relative flex-1">
-                  <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                  <input 
-                    type="text" 
-                    placeholder="Search curriculum by code or title..." 
-                    className="w-full pl-12 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#1e3a8a] transition-all"
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                  />
-                </div>
-                <button onClick={() => setShowAddSub(true)} className="bg-[#1e3a8a] text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 shadow-lg hover:shadow-blue-900/20 whitespace-nowrap">
-                  <Plus size={20} /> Add Subject
-                </button>
-              </div>
-            </div>
-            
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {filteredSubjects.map((sub) => (
-                <div key={sub.id} className={`p-6 bg-slate-50 rounded-[1.5rem] border border-transparent hover:border-[#facc15] hover:bg-white transition-all group shadow-sm flex flex-col justify-between ${!sub.isActive ? 'grayscale opacity-60' : ''}`}>
-                  {editingSubId === sub.id && editSubData ? (
-                    <div className="flex flex-col gap-4">
-                      <div className="space-y-3">
-                        <input 
-                          type="text" 
-                          value={editSubData.code} 
-                          className="w-full px-4 py-2 border border-slate-200 rounded-xl text-xs font-black outline-none focus:ring-2 focus:ring-[#1e3a8a]" 
-                          placeholder="Code (e.g., FAR)"
-                          onChange={(e) => setEditSubData({...editSubData, code: e.target.value.toUpperCase()})} 
-                        />
-                        <input 
-                          type="text" 
-                          value={editSubData.name} 
-                          className="w-full px-4 py-2 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#1e3a8a]" 
-                          placeholder="Subject Name"
-                          onChange={(e) => setEditSubData({...editSubData, name: e.target.value})} 
-                        />
-                      </div>
-                      <div className="flex gap-3 justify-end pt-2">
-                        <button onClick={() => setEditingSubId(null)} className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Cancel</button>
-                        <button onClick={handleSaveEditSub} className="bg-[#065f46] text-white px-4 py-2 rounded-lg text-[10px] font-black uppercase flex items-center gap-1 shadow-md"><Save size={12} /> Save</button>
-                      </div>
-                    </div>
-                  ) : (
-                    <>
-                      <div className="flex items-center justify-between mb-4">
-                        <div className="flex items-center gap-3">
-                          <span className={`text-xs font-black px-3 py-1.5 rounded-lg tracking-widest transition-colors ${sub.isActive ? 'text-[#1e3a8a] bg-blue-100' : 'text-slate-400 bg-slate-200'}`}>{sub.code}</span>
-                          {!sub.isActive && <span className="text-[8px] font-black text-slate-400 uppercase tracking-[0.2em]">Offline</span>}
-                        </div>
-                        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button onClick={() => startEditSub(sub)} className="p-2 text-slate-400 hover:text-[#1e3a8a] hover:bg-blue-50 rounded-lg"><Edit2 size={16} /></button>
-                          <button 
-                            onClick={() => handleToggleSubStatus(sub.id)} 
-                            className={`p-2 rounded-lg transition-all duration-300 ${sub.isActive ? 'text-[#065f46]' : 'text-slate-300'}`}
-                            title={sub.isActive ? "Deactivate Subject" : "Activate Subject"}
-                          >
-                            {sub.isActive ? <ToggleRight size={22} /> : <ToggleLeft size={22} />}
-                          </button>
-                        </div>
-                      </div>
-                      <span className={`text-sm font-black leading-tight transition-colors ${sub.isActive ? 'text-slate-700' : 'text-slate-400'}`}>{sub.name}</span>
-                    </>
-                  )}
-                </div>
-              ))}
-              {filteredSubjects.length === 0 && (
-                <div className="col-span-full py-12 text-center text-slate-400 font-medium">
-                  No subjects found matching "{searchTerm}"
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+											<div className="mt-5 space-y-4">
+												<div className="space-y-2">
+													<label className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Section Name</label>
+													<input
+														type="text"
+														placeholder="e.g., BSBA-M1"
+														className="h-10 w-full rounded-lg border border-slate-300 bg-slate-200 px-4 text-[13px] font-bold text-slate-700 outline-none placeholder:text-slate-500"
+													/>
+												</div>
 
-      {/* Add Tier Modal */}
-      {showAddTierModal && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white w-full max-w-lg rounded-[2.5rem] shadow-2xl p-10 space-y-8 animate-in zoom-in-95">
-            <div className="flex justify-between items-center">
-              <div className="flex items-center gap-3">
-                <div className="p-3 bg-yellow-50 rounded-2xl text-[#facc15]">
-                  <Award size={24} />
-                </div>
-                <h3 className="text-2xl font-black text-[#1e3a8a]">New Difficulty Tier</h3>
-              </div>
-              <button onClick={() => setShowAddTierModal(false)} className="text-slate-400 hover:text-red-500 transition-colors"><X size={28} /></button>
-            </div>
-            <form onSubmit={handleAddTier} className="space-y-6">
-              <div className="space-y-2">
-                <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">Tier Designation Name</label>
-                <input required type="text" placeholder="e.g., Professional Evaluation" className="w-full px-6 py-4 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:ring-4 focus:ring-blue-500/10 font-black text-slate-800" value={newTier.name} onChange={e => setNewTier({...newTier, name: e.target.value})} />
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">Cognitive Weight (Complexity Multiplier)</label>
-                <input required type="number" step="0.5" min="1" max="5" placeholder="1.0" className="w-full px-6 py-4 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:ring-4 focus:ring-blue-500/10 font-black" value={newTier.weight} onChange={e => setNewTier({...newTier, weight: Number(e.target.value)})} />
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">Pedagogical Description</label>
-                <textarea required placeholder="Define the level of professional judgment required for this tier..." className="w-full h-32 px-6 py-4 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:ring-4 focus:ring-blue-500/10 text-sm leading-relaxed" value={newTier.description} onChange={e => setNewTier({...newTier, description: e.target.value})} />
-              </div>
-              <button type="submit" className="w-full bg-[#1e3a8a] text-white py-5 rounded-2xl font-black text-lg shadow-xl shadow-blue-900/20 active:scale-95 transition-all hover:bg-blue-800">Deploy New Difficulty Tier</button>
-            </form>
-          </div>
-        </div>
-      )}
+												<button
+													type="button"
+													className="h-11 w-full rounded-lg bg-[#1d7a4d] text-[13px] font-black text-white shadow-md transition-transform hover:scale-[1.01]"
+												>
+													Create Section Entry
+												</button>
+											</div>
+										</div>
+									</div>
+								) : null}
 
-      {/* Edit Tier Modal */}
-      {editingTier && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white w-full max-w-lg rounded-[2.5rem] shadow-2xl p-10 space-y-8 animate-in zoom-in-95">
-            <div className="flex justify-between items-center">
-              <div className="flex items-center gap-3">
-                <div className="p-3 bg-blue-50 rounded-2xl text-[#1e3a8a]">
-                  <Edit2 size={24} />
-                </div>
-                <h3 className="text-2xl font-black text-[#1e3a8a]">Edit Difficulty Tier</h3>
-              </div>
-              <button onClick={() => setEditingTier(null)} className="text-slate-400 hover:text-red-500 transition-colors"><X size={28} /></button>
-            </div>
-            <form onSubmit={handleUpdateTier} className="space-y-6">
-              <div className="space-y-2">
-                <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">Tier Designation Name</label>
-                <input required type="text" placeholder="e.g., Professional Evaluation" className="w-full px-6 py-4 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:ring-4 focus:ring-blue-500/10 font-black text-slate-800" value={editingTier.name} onChange={e => setEditingTier({...editingTier, name: e.target.value})} />
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">Cognitive Weight (Complexity Multiplier)</label>
-                <input required type="number" step="0.5" min="1" max="5" placeholder="1.0" className="w-full px-6 py-4 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:ring-4 focus:ring-blue-500/10 font-black" value={editingTier.weight} onChange={e => setEditingTier({...editingTier, weight: Number(e.target.value)})} />
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">Pedagogical Description</label>
-                <textarea required placeholder="Define the level of professional judgment required for this tier..." className="w-full h-32 px-6 py-4 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:ring-4 focus:ring-blue-500/10 text-sm leading-relaxed" value={editingTier.description} onChange={e => setEditingTier({...editingTier, description: e.target.value})} />
-              </div>
-              <div className="flex gap-4">
-                <button type="button" onClick={() => setEditingTier(null)} className="flex-1 py-4 border border-slate-200 rounded-2xl text-slate-400 font-black uppercase tracking-widest hover:bg-slate-50 transition-colors">Cancel</button>
-                <button type="submit" className="flex-[2] bg-[#065f46] text-white py-4 rounded-2xl font-black text-lg shadow-xl shadow-emerald-900/10 active:scale-95 transition-all hover:bg-emerald-800">Save Changes</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+					<section className="rounded-[2rem] border border-slate-200 bg-white p-5 shadow-[0_8px_24px_rgba(15,23,42,0.08)] md:p-6">
+						<div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+							<div className="flex items-start gap-3">
+								<div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-[#3652a3] shadow-sm">
+									<Layers3 size={20} />
+								</div>
+								<div>
+									<h1 className="text-[18px] font-black text-slate-900">Sections Management</h1>
+									<p className="text-[12px] font-semibold text-slate-400">Manage class sections to assign</p>
+								</div>
+							</div>
 
-      {showAddFaculty && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white w-full max-w-md rounded-3xl shadow-2xl p-8 space-y-6">
-            <div className="flex justify-between items-center">
-              <h3 className="text-xl font-black text-[#1e3a8a]">Register Faculty</h3>
-              <button onClick={() => setShowAddFaculty(false)} className="text-slate-400 hover:text-red-500 transition-colors"><X size={24} /></button>
-            </div>
-            <form onSubmit={handleAddFaculty} className="space-y-4">
-              <input required type="text" placeholder="Full Name" className="w-full px-4 py-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-[#1e3a8a]" value={newFaculty.name} onChange={e => setNewFaculty({...newFaculty, name: e.target.value})} />
-              <input required type="email" placeholder="Phinma Email" className="w-full px-4 py-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-[#1e3a8a]" value={newFaculty.email} onChange={e => setNewFaculty({...newFaculty, email: e.target.value})} />
-              <button type="submit" className="w-full bg-[#1e3a8a] text-white py-4 rounded-xl font-black shadow-lg shadow-blue-900/20 active:scale-95 transition-all">Register Instructor</button>
-            </form>
-          </div>
-        </div>
-      )}
+							<div className="flex w-full max-w-[430px] flex-col gap-3 lg:flex-row lg:items-center lg:justify-end">
+								<div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm lg:w-[250px]">
+									<Search size={16} className="text-slate-400" />
+									<input
+										type="text"
+										placeholder="Search"
+										className="w-full bg-transparent text-[13px] font-semibold text-slate-700 outline-none placeholder:text-slate-400"
+									/>
+								</div>
 
-      {activeTab === 'ANNOUNCEMENTS' && (
-        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
-          <div className="bg-[#1e3a8a] p-6 md:p-10 rounded-3xl text-white flex flex-col md:flex-row justify-between items-center gap-6 shadow-2xl relative overflow-hidden">
-            <div className="absolute top-0 right-0 p-4 opacity-10"><Megaphone size={120} /></div>
-            <div className="relative z-10 space-y-2">
-              <h3 className="text-3xl font-black tracking-tight">Announcements</h3>
-              <p className="text-blue-200 max-w-lg">Post and manage system-wide notices for students, faculty, or staff.</p>
-            </div>
-            <button onClick={() => setShowComposeAnnouncement(true)} className="relative z-10 bg-[#facc15] text-[#065f46] px-8 py-4 rounded-2xl font-black flex items-center gap-2 shadow-xl hover:scale-105 transition-all active:scale-95">
-              <Plus size={20} /> New Announcement
-            </button>
-          </div>
-          <div className="space-y-4">
-            {announcements.length === 0 ? (
-              <div className="bg-white rounded-2xl border border-slate-100 p-16 text-center text-slate-400 font-bold">No announcements yet.</div>
-            ) : announcements.map((a) => (
-              <div key={a.id} className="bg-white rounded-2xl border border-slate-100 p-6 md:p-8 shadow-sm hover:shadow-md transition-shadow group">
-                <div className="flex justify-between items-start gap-4">
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2">
-                      <span className="text-[10px] px-2 py-1 rounded-full font-black uppercase tracking-widest bg-blue-100 text-[#1e3a8a]">{a.authorRole}</span>
-                      <span className="text-[10px] text-slate-400 font-medium">{new Date(a.createdAt).toLocaleDateString()}</span>
-                    </div>
-                    <h4 className="text-lg font-black text-slate-800">{a.title}</h4>
-                    <p className="text-sm text-slate-600 leading-relaxed">{a.content}</p>
-                    <p className="text-[10px] text-slate-400 font-bold">by {a.authorName}</p>
-                  </div>
-                  <button onClick={() => handleDeleteAnnouncement(a.id)} className="opacity-0 group-hover:opacity-100 p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all shrink-0" title="Delete announcement">
-                    <Trash2 size={18} />
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+								<button
+									type="button"
+									onClick={() => setShowAddSectionModal(true)}
+									className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-[#3652a3] px-4 text-[13px] font-black text-white shadow-[0_4px_0_rgba(0,0,0,0.1)]"
+								>
+									<Plus size={16} />
+									Add Sections
+								</button>
+							</div>
+						</div>
 
-      {activeTab === 'LEADERBOARD' && (
-        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
-          <div className="bg-[#1e3a8a] p-6 md:p-10 rounded-3xl text-white flex flex-col md:flex-row justify-between items-center gap-6 shadow-2xl relative overflow-hidden">
-            <div className="absolute top-0 right-0 p-4 opacity-10"><Trophy size={120} /></div>
-            <div className="relative z-10 space-y-2">
-              <h3 className="text-3xl font-black tracking-tight">Top 10 Student Leaderboard</h3>
-              <p className="text-blue-200 max-w-lg">Top 10 system-wide ranking by average drill accuracy across all board subjects.</p>
-            </div>
-          </div>
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex flex-wrap gap-3 items-end">
-            <div className="flex flex-col gap-1">
-              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">Subject</label>
-              <select value={lbSubjectId} onChange={e => setLbSubjectId(e.target.value)} className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-[#1e3a8a] min-w-[160px]">
-                <option value="">All Subjects</option>
-                {lbSubjects.map(s => <option key={s.id} value={s.id}>{s.code} – {s.name}</option>)}
-              </select>
-            </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">Difficulty</label>
-              <select value={lbDifficulty} onChange={e => setLbDifficulty(e.target.value)} className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-[#1e3a8a] min-w-[140px]">
-                <option value="">All Levels</option>
-                <option value="Easy">Easy</option>
-                <option value="Average">Average</option>
-                <option value="Difficult">Difficult</option>
-              </select>
-            </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">Date From</label>
-              <input type="date" value={lbDateFrom} onChange={e => setLbDateFrom(e.target.value)} className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-[#1e3a8a]" />
-            </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">Date To</label>
-              <input type="date" value={lbDateTo} onChange={e => setLbDateTo(e.target.value)} className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-[#1e3a8a]" />
-            </div>
-            {(lbSubjectId || lbDifficulty || lbDateFrom || lbDateTo) && (
-              <button onClick={() => { setLbSubjectId(''); setLbDifficulty(''); setLbDateFrom(''); setLbDateTo(''); }} className="px-4 py-2 text-xs font-bold text-slate-500 border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors mt-4">
-                Reset Filters
-              </button>
-            )}
-          </div>
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-            {leaderboardLoading ? (
-              <div className="p-16 text-center text-slate-400 font-bold">Loading leaderboard...</div>
-            ) : (
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-slate-100">
-                    <th className="text-left px-6 py-4 text-[10px] font-black uppercase tracking-widest text-slate-400">Rank</th>
-                    <th className="text-left px-6 py-4 text-[10px] font-black uppercase tracking-widest text-slate-400">Student</th>
-                    <th className="text-left px-6 py-4 text-[10px] font-black uppercase tracking-widest text-slate-400">Student ID</th>
-                    <th className="text-right px-6 py-4 text-[10px] font-black uppercase tracking-widest text-slate-400">Avg Accuracy</th>
-                    <th className="text-right px-6 py-4 text-[10px] font-black uppercase tracking-widest text-slate-400">Sessions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {leaderboard.map((entry) => (
-                    <tr key={entry.rank} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
-                      <td className="px-6 py-4">
-                        <div className={`w-8 h-8 rounded-full border flex items-center justify-center font-black text-xs ${getRankBadgeClasses(entry.rank)}`}>
-                          {entry.rank <= 3 ? <Medal size={14} /> : entry.rank}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 font-black text-slate-800">{entry.name}</td>
-                      <td className="px-6 py-4 text-slate-500 font-mono text-xs">{entry.studentId ?? '—'}</td>
-                      <td className="px-6 py-4 text-right font-black text-slate-800">{entry.avgAccuracy}%</td>
-                      <td className="px-6 py-4 text-right text-slate-500 font-bold">{entry.sessionsTaken}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </div>
-      )}
+						<div className="mt-5 grid gap-3 md:grid-cols-3">
+							{[
+								'BSBA - M1',
+								'BSBA - M2',
+								'BSBA - M3',
+								'BSBA - M4',
+								'BSBA - M5',
+								'BSBA - M6',
+							].map((section, index) => (
+								<div key={section} className="rounded-[1.4rem] bg-[#f2ecec] p-3 shadow-[0_4px_10px_rgba(15,23,42,0.05)]">
+									<div className="rounded-xl bg-[#cbe1e7] px-4 py-4 shadow-[0_4px_10px_rgba(15,23,42,0.12)]">
+										<div className="flex items-start justify-between gap-3">
+											<div className="text-[13px] font-black text-[#3652a3]">{section}</div>
+											{index === 0 ? (
+												<div className="flex items-center gap-3 text-slate-400">
+													<PencilLine size={14} />
+													<button type="button" className="flex h-5 w-9 items-center rounded-full border border-[#1d7a4d] bg-white px-0.5" aria-label="Toggle section status">
+														<span className="ml-auto h-3.5 w-3.5 rounded-full bg-[#1d7a4d]" />
+													</button>
+												</div>
+											) : null}
+										</div>
+									</div>
+								</div>
+							))}
+						</div>
+					</section>
+				</div>
+			);
+		}
 
-      {showComposeAnnouncement && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white w-full max-w-lg rounded-[2.5rem] shadow-2xl p-10 space-y-8 animate-in zoom-in-95">
-            <div className="flex justify-between items-center">
-              <h3 className="text-2xl font-black text-[#1e3a8a]">New Announcement</h3>
-              <button onClick={() => setShowComposeAnnouncement(false)} className="text-slate-400 hover:text-red-500 transition-colors"><X size={28} /></button>
-            </div>
-            <div className="px-4 py-3 bg-blue-50 border border-blue-100 rounded-xl flex items-center gap-3">
-              <AlertCircle size={18} className="text-[#1e3a8a] shrink-0" />
-              <p className="text-sm font-bold text-[#1e3a8a]">This announcement will be sent to all Faculty Members.</p>
-            </div>
-            <form onSubmit={handlePostAnnouncement} className="space-y-4">
-              <input required type="text" placeholder="Title" className="w-full px-5 py-4 bg-slate-50 border border-slate-200 rounded-2xl" value={newAnnouncementTitle} onChange={e => setNewAnnouncementTitle(e.target.value)} />
-              <textarea required rows={5} placeholder="Message" className="w-full px-5 py-4 bg-slate-50 border border-slate-200 rounded-2xl" value={newAnnouncementContent} onChange={e => setNewAnnouncementContent(e.target.value)} />
-              <button type="submit" disabled={announcementPosting} className="w-full bg-[#1e3a8a] text-white py-4 rounded-2xl font-black">{announcementPosting ? 'Posting...' : 'Post Announcement'}</button>
-            </form>
-          </div>
-        </div>
-      )}
+		if (activeTab === 'ANNOUNCEMENTS') {
+			return (
+				<div className="space-y-6 pb-8 text-slate-900">
+					<section className="relative overflow-hidden rounded-[2rem] bg-[#3652a3] px-5 py-5 text-white shadow-[0_8px_24px_rgba(15,23,42,0.18)] md:px-6 md:py-6">
+						<div className="relative z-10 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+							<div className="max-w-xl space-y-3">
+								<h1 className="text-[28px] font-black tracking-tight md:text-[30px]">Announcements</h1>
+								<p className="max-w-lg text-[15px] leading-5 text-blue-100/85">
+									Post and manage system-wide notices for students, faculty, or staff.
+								</p>
+							</div>
 
-      {showAddSub && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white w-full max-w-md rounded-3xl shadow-2xl p-8 space-y-6">
-            <div className="flex justify-between items-center">
-              <h3 className="text-xl font-black text-[#1e3a8a]">Add New Subject</h3>
-              <button onClick={() => setShowAddSub(false)} className="text-slate-400 hover:text-red-500 transition-colors"><X size={24} /></button>
-            </div>
-            <form onSubmit={handleAddSubject} className="space-y-4">
-              <div className="space-y-1">
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Subject Code</label>
-                <input required type="text" placeholder="e.g., FAR, TAX, AFAR" className="w-full px-4 py-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-[#1e3a8a] text-sm font-black" value={newSub.code} onChange={e => setNewSub({...newSub, code: e.target.value.toUpperCase()})} />
-              </div>
-              <div className="space-y-1">
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Subject Name</label>
-                <input required type="text" placeholder="Full name of the board subject" className="w-full px-4 py-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-[#1e3a8a] text-sm font-bold" value={newSub.name} onChange={e => setNewSub({...newSub, name: e.target.value})} />
-              </div>
-              <button type="submit" className="w-full bg-[#065f46] text-white py-4 rounded-xl font-black shadow-lg shadow-emerald-900/20 active:scale-95 transition-all mt-4">Create Subject Entry</button>
-            </form>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+							<button
+								type="button"
+								onClick={() => setShowComposeAnnouncementModal(true)}
+								className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl bg-[#f5c842] px-5 text-[15px] font-black text-[#1d7a4d] shadow-[0_6px_0_rgba(0,0,0,0.12)] transition-transform hover:translate-y-0.5"
+							>
+								<Plus size={18} />
+								New Announcement
+							</button>
+						</div>
+
+						<div className="pointer-events-none absolute right-3 top-1 h-36 w-36 rounded-full border-[12px] border-white/10 md:right-5 md:top-0 md:h-40 md:w-40" />
+						<div className="pointer-events-none absolute right-12 top-8 h-24 w-24 rounded-full border-[12px] border-white/10 md:right-16 md:top-10 md:h-28 md:w-28" />
+						<div className="pointer-events-none absolute right-6 top-12 opacity-10">
+							<Layers3 size={110} />
+						</div>
+					</section>
+
+					<div className="rounded-[1.4rem] border border-slate-200 bg-white px-5 py-4 shadow-[0_8px_20px_rgba(15,23,42,0.06)]">
+						<div className="flex items-start gap-3">
+							<div className="flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-[#3652a3]">
+								<span>Admin</span>
+							</div>
+							<span className="pt-0.5 text-[11px] font-black text-slate-400">1/01/2026</span>
+						</div>
+						<div className="mt-3 space-y-1">
+							<h3 className="text-[16px] font-black text-slate-900">Lorem ipsum</h3>
+							<p className="text-[13px] leading-5 text-slate-700">Lorem ipsum dolor sit amet, consectetur adipiscing elit.</p>
+							<p className="pt-3 text-[12px] font-bold text-slate-500">by Admin User</p>
+						</div>
+					</div>
+
+					{showComposeAnnouncementModal ? (
+						<div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/70 p-4 backdrop-blur-sm">
+							<div className="w-full max-w-[420px] rounded-[2rem] border border-slate-200 bg-white p-6 shadow-2xl md:p-8">
+								<div className="flex items-start justify-between gap-4">
+									<div className="flex items-center gap-3">
+										<div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#f5c842] text-[#1d7a4d] shadow-sm">
+											<ShieldCheck size={20} />
+										</div>
+										<h3 className="text-[22px] font-black text-[#1e3a8a]">New Announcement</h3>
+									</div>
+									<button
+										type="button"
+										onClick={() => setShowComposeAnnouncementModal(false)}
+										className="text-slate-400 transition-colors hover:text-slate-600"
+										aria-label="Close announcement modal"
+									>
+										<X size={28} />
+									</button>
+								</div>
+
+								<div className="mt-6 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-bold text-[#1e3a8a]">
+									This announcement will be sent to all Students, Faculty, and Staff.
+								</div>
+
+								<div className="mt-6 space-y-4">
+									<input
+										type="text"
+										placeholder="Title"
+										className="h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-[13px] font-bold text-slate-800 outline-none placeholder:text-slate-400"
+									/>
+									<textarea
+										rows={5}
+										placeholder="Write your announcement..."
+										className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-[13px] leading-6 text-slate-800 outline-none placeholder:text-slate-400"
+									/>
+									<button
+										type="button"
+										className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#1e3a8a] text-[13px] font-black text-white shadow-xl shadow-blue-900/15 transition-transform hover:scale-[1.01]"
+									>
+										<Plus size={16} />
+										Post Announcement
+									</button>
+								</div>
+							</div>
+						</div>
+					) : null}
+				</div>
+			);
+		}
+
+		if (activeTab === 'LEADERBOARD') {
+			return (
+				<div className="space-y-6 pb-8 text-slate-900">
+					<section className="relative overflow-hidden rounded-[2rem] bg-[#3652a3] px-6 py-6 text-white shadow-[0_8px_24px_rgba(15,23,42,0.18)] md:px-8 md:py-7">
+						<div className="relative z-10 flex items-center justify-between gap-4">
+							<h1 className="text-[28px] font-black tracking-tight md:text-[30px]">Student Leaderboard</h1>
+							<div className="hidden text-white/30 lg:block">
+								<Trophy size={104} strokeWidth={1.4} />
+							</div>
+						</div>
+					</section>
+
+					<div className="mx-auto w-full max-w-[760px] rounded-[0.35rem] border border-[#3652a3] bg-[#3652a3] p-1.5 shadow-[0_6px_0_rgba(0,0,0,0.08)]">
+						<div className="flex flex-col gap-2 lg:flex-row lg:items-stretch">
+							<div className="flex overflow-hidden rounded-md bg-[#3652a3] text-[14px] font-black">
+								<button
+									type="button"
+									onClick={() => setLeaderboardView('GLOBAL')}
+									className={`px-6 py-3 transition-colors ${leaderboardView === 'GLOBAL' ? 'bg-[#f5c842] text-[#1d7a4d]' : 'text-white/55'}`}
+								>
+									Global
+								</button>
+								<button
+									type="button"
+									onClick={() => setLeaderboardView('PASSED')}
+									className={`px-6 py-3 transition-colors ${leaderboardView === 'PASSED' ? 'bg-[#f5c842] text-[#1d7a4d]' : 'text-white/55'}`}
+								>
+									Passed
+								</button>
+							</div>
+
+							<div className="grid flex-1 gap-2 px-2 text-[10px] font-black uppercase tracking-[0.18em] text-white lg:grid-cols-[1.15fr_1fr_1.3fr] lg:items-center">
+								<div className="space-y-1">
+									<label className="block text-white">Subjects</label>
+									<select className="h-9 w-full rounded-sm border border-slate-200 bg-white px-3 text-[12px] font-black text-slate-900 outline-none">
+										<option>All Subjects</option>
+										<option>FAR</option>
+										<option>AFAR</option>
+										<option>MAS</option>
+										<option>TAX</option>
+										<option>RFBT</option>
+										<option>AUD</option>
+									</select>
+								</div>
+
+								<div className="space-y-1">
+									<label className="block text-white">Difficulty</label>
+									<select className="h-9 w-full rounded-sm border border-slate-200 bg-white px-3 text-[12px] font-black text-slate-900 outline-none">
+										<option>All Levels</option>
+										<option>Easy</option>
+										<option>Average</option>
+										<option>Difficult</option>
+									</select>
+								</div>
+
+								<div className="space-y-1">
+									<label className="block text-white">Date</label>
+									<div className="flex items-center gap-2">
+										<input type="date" className="h-9 min-w-0 flex-1 rounded-sm border border-slate-200 bg-white px-2 text-[11px] font-black text-slate-900 outline-none" />
+										<span className="text-[11px] font-black tracking-widest text-white">TO</span>
+										<input type="date" className="h-9 min-w-0 flex-1 rounded-sm border border-slate-200 bg-white px-2 text-[11px] font-black text-slate-900 outline-none" />
+									</div>
+								</div>
+							</div>
+						</div>
+					</div>
+
+					<div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+						<table className="w-full border-separate border-spacing-0 text-sm">
+							<thead>
+								<tr className="border-b border-slate-100 bg-white">
+									<th className="px-6 py-4 text-left text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Rank</th>
+									<th className="px-6 py-4 text-left text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Student</th>
+									<th className="px-6 py-4 text-left text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Student ID</th>
+									<th className="px-6 py-4 text-right text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Avg Accuracy</th>
+									<th className="px-6 py-4 text-right text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Sessions</th>
+								</tr>
+							</thead>
+							<tbody>
+								{leaderboardRows.map((row) => (
+									<tr key={row.studentId} className="border-t border-slate-100">
+										<td className="px-6 py-4">
+											<div className={`flex h-7 w-7 items-center justify-center rounded-full border text-[11px] font-black ${row.rank === 1 ? 'border-amber-200 bg-amber-100 text-amber-700' : row.rank === 2 ? 'border-slate-300 bg-slate-200 text-slate-700' : row.rank === 3 ? 'border-orange-200 bg-orange-100 text-orange-700' : 'border-slate-200 bg-slate-50 text-slate-600'}`}>
+												{row.rank <= 3 ? <Trophy size={14} /> : row.rank}
+											</div>
+										</td>
+										<td className="px-6 py-4 text-[12px] font-black text-slate-900">student</td>
+										<td className="px-6 py-4 text-[11px] font-black tracking-[0.12em] text-slate-500">{row.studentId}</td>
+										<td className="px-6 py-4 text-right text-[13px] font-black text-slate-900">{row.accuracy}%</td>
+										<td className="px-6 py-4 text-right text-[13px] font-black text-slate-900">{row.sessions}</td>
+									</tr>
+								))}
+							</tbody>
+						</table>
+					</div>
+				</div>
+			);
+		}
+
+		return (
+			<div className="space-y-6 pb-8">
+				<Panel
+					title={
+						activeTab === 'FACULTY'
+							? 'Faculty Management'
+							: activeTab === 'DIFFICULTIES'
+								? 'Difficulty Tiers'
+								: activeTab === 'STRATEGIC'
+									? 'Curriculum Management'
+									: 'Dashboard'
+					}
+					subtitle="Core admin controls remain available here while the analytics dashboard sits on the main view."
+					icon={activeTab === 'FACULTY' ? Users : activeTab === 'DIFFICULTIES' ? Layers3 : ShieldCheck}
+				>
+					<div className="grid gap-4 md:grid-cols-3">
+						{activeTab === 'FACULTY'
+							? DEMO_USERS.filter((user) => user.role === UserRole.FACULTY).map((user) => (
+									<div key={user.email} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+										<div className="flex items-center justify-between">
+											<div>
+												<p className="font-black text-slate-900">{user.name}</p>
+												<p className="text-xs font-semibold text-slate-500">{user.email}</p>
+											</div>
+											<span className="rounded-full bg-emerald-100 px-3 py-1 text-[10px] font-black uppercase tracking-widest text-emerald-700">
+												Active
+											</span>
+										</div>
+									</div>
+								))
+							: null}
+
+						{activeTab === 'DIFFICULTIES'
+							? INITIAL_DIFFICULTY_TIERS.map((tier) => (
+									<div key={tier.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+										<p className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-400">Weight {tier.weight}</p>
+										<p className="mt-1 font-black text-slate-900">{tier.name}</p>
+										<p className="mt-2 text-sm leading-6 text-slate-500">{tier.description}</p>
+									</div>
+								))
+							: null}
+
+						{activeTab === 'STRATEGIC'
+							? MOCK_SUBJECTS.map((subject) => (
+									<div key={subject.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+										<p className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-400">{subject.code}</p>
+										<p className="mt-1 font-black text-slate-900">{subject.name}</p>
+									</div>
+								))
+							: null}
+					</div>
+				</Panel>
+			</div>
+		);
+	}
+
+	return (
+		<div className="space-y-6 pb-8 text-slate-900">
+			<div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+				<div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-[0_8px_24px_rgba(15,23,42,0.05)]">
+					<CalendarDays size={16} className="text-slate-400" />
+					<input
+						type="date"
+						defaultValue=""
+						className="w-[120px] bg-transparent text-[11px] font-black uppercase tracking-widest text-slate-500 outline-none"
+					/>
+					<span className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-300">TO</span>
+					<input
+						type="date"
+						defaultValue=""
+						className="w-[120px] bg-transparent text-[11px] font-black uppercase tracking-widest text-slate-500 outline-none"
+					/>
+				</div>
+
+				<button
+					type="button"
+					onClick={exportData}
+					className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#1e3a8a] px-4 py-3 text-xs font-black uppercase tracking-[0.18em] text-white shadow-lg shadow-blue-900/15 transition-transform hover:scale-[1.01]"
+				>
+					<Download size={14} />
+					Export Data
+				</button>
+			</div>
+
+			<div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+				{stats.map((stat) => (
+					<StatCard key={stat.label} {...stat} />
+				))}
+			</div>
+
+			<div className="grid grid-cols-1 gap-4 xl:grid-cols-5">
+				<Panel
+					title="Historical Trend Line"
+					subtitle="Accuracy and passing likelihood for 2022, 2023, and 2024, and current batch"
+					icon={ArrowUpRight}
+					className="xl:col-span-3"
+				>
+					<div className="h-[320px]">
+						<ResponsiveContainer width="100%" height="100%">
+							<LineChart data={trendData} margin={{ top: 10, right: 20, left: -4, bottom: 0 }}>
+								<CartesianGrid stroke="#e5e7eb" strokeDasharray="3 3" vertical={false} />
+								<XAxis dataKey="year" tick={{ fill: '#94a3b8', fontSize: 12, fontWeight: 700 }} axisLine={false} tickLine={false} />
+								<YAxis tick={{ fill: '#94a3b8', fontSize: 12, fontWeight: 700 }} axisLine={false} tickLine={false} tickFormatter={formatPercent} />
+								<Tooltip formatter={(value: number) => [`${value}%`, '']} labelStyle={{ color: '#0f172a', fontWeight: 800 }} />
+								<Legend wrapperStyle={{ fontSize: 12, fontWeight: 800, color: '#64748b' }} />
+								<Line type="monotone" dataKey="passingLikelihood" name="Passing Likelihood" stroke="#3652a3" strokeWidth={2.5} dot={{ r: 4, strokeWidth: 2, fill: '#fff' }} />
+								<Line type="monotone" dataKey="averageAccuracy" name="Average Accuracy" stroke="#0f9d58" strokeWidth={2.5} dot={{ r: 4, strokeWidth: 2, fill: '#fff' }} />
+							</LineChart>
+						</ResponsiveContainer>
+					</div>
+				</Panel>
+
+				<Panel
+					title="Global Readiness Gauge"
+					icon={Gauge}
+					action={
+						<span className="rounded-lg bg-emerald-700 px-3 py-2 text-[9px] font-black uppercase tracking-[0.18em] text-white shadow-sm">
+							Download PDF
+						</span>
+					}
+					className="xl:col-span-2"
+				>
+					<div className="flex flex-col items-center justify-center gap-4">
+						<div className="relative h-[210px] w-full max-w-[270px]">
+							<ResponsiveContainer width="100%" height="100%">
+								<PieChart>
+									<Pie
+										data={gaugeData}
+										startAngle={180}
+										endAngle={0}
+										innerRadius={72}
+										outerRadius={96}
+										paddingAngle={1}
+										dataKey="value"
+									>
+										<Cell fill="#10b981" />
+										<Cell fill="#d1d5db" />
+									</Pie>
+								</PieChart>
+							</ResponsiveContainer>
+							<div className="pointer-events-none absolute inset-x-0 bottom-8 flex flex-col items-center justify-center text-center">
+								<p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Board Passing Likelihood</p>
+								<p className="mt-1 text-2xl font-black text-[#3652a3]">50.0%</p>
+							</div>
+						</div>
+						<p className="max-w-[220px] text-center text-[11px] font-bold leading-5 text-slate-900">
+							Board Passing Likelihood = (Pass Rate x 0.50) + (Average Accuracy x 0.35) + (Completion Rate x 0.15)
+						</p>
+					</div>
+				</Panel>
+			</div>
+
+			<div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+				<Panel title="Subject Performance Radar" icon={Target}>
+					<div className="h-[320px]">
+						<ResponsiveContainer width="100%" height="100%">
+							<RadarChart data={radarData} outerRadius="70%">
+								<PolarGrid stroke="#fde68a" />
+								<PolarAngleAxis dataKey="subject" tick={{ fill: '#b4b4b4', fontSize: 11, fontWeight: 700 }} />
+								<PolarRadiusAxis angle={90} domain={[0, 100]} tick={false} axisLine={false} />
+								<RadarSeries dataKey="value" stroke="#a1a1aa" fill="#9ca3af" fillOpacity={0.82} />
+							</RadarChart>
+						</ResponsiveContainer>
+					</div>
+				</Panel>
+
+				<Panel title="Weekly Engagement" icon={Activity}>
+					<div className="h-[320px]">
+						<ResponsiveContainer width="100%" height="100%">
+							<AreaChart data={weeklyEngagement} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+								<defs>
+									<linearGradient id="engagementFill" x1="0" y1="0" x2="0" y2="1">
+										<stop offset="5%" stopColor="#3652a3" stopOpacity={0.42} />
+										<stop offset="95%" stopColor="#3652a3" stopOpacity={0.04} />
+									</linearGradient>
+								</defs>
+								<CartesianGrid stroke="#e5e7eb" strokeDasharray="3 3" vertical={false} />
+								<XAxis dataKey="day" tick={{ fill: '#94a3b8', fontSize: 12, fontWeight: 700 }} axisLine={false} tickLine={false} />
+								<YAxis tick={{ fill: '#94a3b8', fontSize: 12, fontWeight: 700 }} axisLine={false} tickLine={false} />
+								<Tooltip labelStyle={{ color: '#0f172a', fontWeight: 800 }} />
+								<Area type="monotone" dataKey="value" stroke="#3652a3" strokeWidth={2.5} fill="url(#engagementFill)" />
+							</AreaChart>
+						</ResponsiveContainer>
+					</div>
+				</Panel>
+			</div>
+
+			<div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+				<Panel title="Faculty Efficiency Analysis" icon={BarChart3}>
+					<div className="h-[320px]">
+						<ResponsiveContainer width="100%" height="100%">
+							<BarChart data={facultyEfficiency} margin={{ top: 10, right: 10, left: -12, bottom: 0 }}>
+								<CartesianGrid stroke="#e5e7eb" strokeDasharray="3 3" horizontal={false} />
+								<XAxis dataKey="name" tick={{ fill: '#94a3b8', fontSize: 11, fontWeight: 700 }} axisLine={false} tickLine={false} />
+								<YAxis tick={{ fill: '#94a3b8', fontSize: 12, fontWeight: 700 }} axisLine={false} tickLine={false} domain={[0, 100]} />
+								<Tooltip formatter={(value: number) => [`${value}%`, 'Readiness']} labelStyle={{ color: '#0f172a', fontWeight: 800 }} />
+								<Legend />
+								<Bar dataKey="score" name="Readiness Score (%)" radius={[6, 6, 0, 0]}>
+									{facultyEfficiency.map((entry) => (
+										<Cell key={entry.name} fill={entry.risk ? '#ef4444' : '#3652a3'} />
+									))}
+								</Bar>
+							</BarChart>
+						</ResponsiveContainer>
+					</div>
+				</Panel>
+
+				<Panel title="Question Bank Analysis" icon={BookOpen}>
+					<div className="space-y-4">
+						<div className="flex flex-wrap gap-2">
+							<button
+								type="button"
+								onClick={() => setActiveTab('ITEM_ANALYSIS')}
+								className="rounded-lg bg-[#3652a3] px-3 py-2 text-[10px] font-black uppercase tracking-widest text-white"
+							>
+								View Detailed Reports
+							</button>
+							<button
+								type="button"
+								onClick={() => setShowDifficultyReports(true)}
+								className="rounded-lg bg-[#3652a3] px-3 py-2 text-[10px] font-black uppercase tracking-widest text-white"
+							>
+								View Difficulty Reports
+							</button>
+						</div>
+						<div className="space-y-4 pt-1">
+							{questionBankAnalysis.map((item) => (
+								<div key={item.code} className="space-y-2">
+									<div className="flex items-center justify-between">
+										<span className="text-xs font-black tracking-widest text-slate-700">{item.code}</span>
+										<span className="text-sm font-black" style={{ color: item.color }}>
+											{item.score}%
+										</span>
+									</div>
+									<div className="h-2 rounded-full bg-slate-200">
+										<div
+											className="h-2 rounded-full"
+											style={{ width: `${item.score}%`, backgroundColor: item.color }}
+										/>
+									</div>
+								</div>
+							))}
+						</div>
+					</div>
+				</Panel>
+			</div>
+
+			<div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+				<Panel title="Subject Efficiency Analysis" icon={ArrowUpRight}>
+					<div className="h-[320px]">
+						<ResponsiveContainer width="100%" height="100%">
+							<BarChart data={subjectEfficiency} margin={{ top: 10, right: 10, left: -12, bottom: 0 }}>
+								<CartesianGrid stroke="#e5e7eb" strokeDasharray="3 3" horizontal={false} />
+								<XAxis dataKey="code" tick={{ fill: '#94a3b8', fontSize: 11, fontWeight: 700 }} axisLine={false} tickLine={false} />
+								<YAxis tick={{ fill: '#94a3b8', fontSize: 12, fontWeight: 700 }} axisLine={false} tickLine={false} domain={[0, 100]} />
+								<Tooltip formatter={(value: number) => [`${value}%`, '']} labelStyle={{ color: '#0f172a', fontWeight: 800 }} />
+								<Legend />
+								<Bar dataKey="blue" name="Readiness Score (%)" fill="#3652a3" radius={[6, 6, 0, 0]} />
+								<Bar dataKey="red" name="At-Risk" fill="#ef4444" radius={[6, 6, 0, 0]} />
+							</BarChart>
+						</ResponsiveContainer>
+					</div>
+				</Panel>
+
+				<Panel title="Section Readiness Comparison" icon={ArrowUpRight}>
+					<div className="h-[320px]">
+						<ResponsiveContainer width="100%" height="100%">
+							<BarChart data={sectionReadiness} margin={{ top: 10, right: 10, left: -12, bottom: 0 }}>
+								<CartesianGrid stroke="#e5e7eb" strokeDasharray="3 3" horizontal={false} />
+								<XAxis dataKey="code" tick={{ fill: '#94a3b8', fontSize: 11, fontWeight: 700 }} axisLine={false} tickLine={false} />
+								<YAxis tick={{ fill: '#94a3b8', fontSize: 12, fontWeight: 700 }} axisLine={false} tickLine={false} domain={[0, 100]} />
+								<Tooltip formatter={(value: number) => [`${value}%`, '']} labelStyle={{ color: '#0f172a', fontWeight: 800 }} />
+								<Legend />
+								<Bar dataKey="blue" name="Readiness Score (%)" fill="#3652a3" radius={[6, 6, 0, 0]} />
+								<Bar dataKey="red" name="At-Risk" fill="#ef4444" radius={[6, 6, 0, 0]} />
+							</BarChart>
+						</ResponsiveContainer>
+					</div>
+				</Panel>
+			</div>
+
+			{showDifficultyReports ? (
+				<div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/70 p-4 backdrop-blur-sm">
+					<div className="relative w-full max-w-[380px] rounded-sm border border-slate-200 bg-white p-6 shadow-2xl">
+						<button
+							type="button"
+							onClick={() => setShowDifficultyReports(false)}
+							className="absolute right-4 top-4 text-slate-400 transition-colors hover:text-slate-600"
+							aria-label="Close difficulty reports"
+						>
+							<span className="text-4xl leading-none">×</span>
+						</button>
+
+						<div className="flex items-start gap-3 pr-8">
+							<div className="mt-1 text-[#facc15]">
+								<BarChart3 size={18} />
+							</div>
+							<h3 className="text-[15px] font-black leading-5 text-slate-900">Question Bank Difficulty Distribution</h3>
+						</div>
+
+						<div className="mt-10 space-y-10">
+							{[
+								{ label: 'Recall (Easy)', value: 82 },
+								{ label: 'Application (Average)', value: 70 },
+								{ label: 'Evaluation (Difficult)', value: 42 },
+							].map((item) => (
+								<div key={item.label} className="grid grid-cols-[92px_1fr] items-center gap-3">
+									<div className="text-[10px] font-black leading-4 text-slate-900">{item.label}</div>
+									<div className="h-4 rounded-full bg-slate-200">
+										<div
+											className="h-4 rounded-full bg-[#3652a3]"
+											style={{ width: `${item.value}%` }}
+										/>
+									</div>
+								</div>
+							))}
+						</div>
+					</div>
+				</div>
+			) : null}
+
+			{selectedStudent ? (
+				<div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/70 p-4 backdrop-blur-sm">
+					<div className="w-full max-w-[780px] overflow-hidden rounded-[2rem] border border-slate-200 bg-white shadow-2xl">
+						<div className="flex items-start justify-between gap-4 p-5 md:p-6">
+							<div className="flex items-start gap-4">
+								<div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-2xl border border-slate-300 bg-white text-3xl font-black text-[#3652a3] shadow-[0_4px_18px_rgba(15,23,42,0.08)]">
+									{selectedStudent.name.charAt(0)}
+								</div>
+								<div className="pt-1">
+									<p className="text-sm font-black text-slate-700">{selectedStudent.studentId}</p>
+									<p className="text-[13px] font-bold text-slate-600">Section: {selectedStudent.section}</p>
+									<p className="text-[13px] font-bold text-slate-600">Batch: {selectedStudent.batch}</p>
+									<p className="text-[13px] font-semibold text-slate-400">{selectedStudent.email}</p>
+								</div>
+							</div>
+							<button
+								type="button"
+								onClick={() => setSelectedStudent(null)}
+								className="text-slate-400 transition-colors hover:text-slate-600"
+								aria-label="Close student report"
+							>
+								<X size={34} strokeWidth={1.5} />
+							</button>
+						</div>
+
+						<div className="grid gap-3 px-5 pb-5 md:grid-cols-3 md:px-6">
+							<div className="rounded-xl border border-slate-200 p-4 md:p-5">
+								<h3 className="text-xl font-black text-slate-900">Accuracy Rate</h3>
+								<div className="mt-3 flex items-center justify-center">
+									<div className="relative h-[150px] w-[150px]">
+										<ResponsiveContainer width="100%" height="100%">
+											<PieChart>
+												<Pie
+													data={[
+														{ name: 'score', value: selectedStudent.accuracy },
+														{ name: 'rest', value: 100 - selectedStudent.accuracy },
+													]}
+													startAngle={90}
+													endAngle={-270}
+													innerRadius={46}
+													outerRadius={64}
+													paddingAngle={0}
+													dataKey="value"
+												>
+													<Cell fill="#10b981" />
+													<Cell fill="#d1d5db" />
+												</Pie>
+											</PieChart>
+										</ResponsiveContainer>
+										<div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+											<p className="text-[32px] font-black text-slate-900">{selectedStudent.accuracy}%</p>
+										</div>
+									</div>
+								</div>
+							</div>
+
+							<div className="rounded-xl border border-slate-200 p-4 md:p-5">
+								<h3 className="text-xl font-black text-slate-900">Weakest Subject</h3>
+								<div className="mt-6 flex h-[92px] items-center justify-center rounded-2xl bg-[#f7c3c3] text-2xl font-black text-red-600">
+									{selectedStudent.weakestSubject}
+								</div>
+							</div>
+
+							<div className="rounded-xl border border-slate-200 p-4 md:p-5">
+								<div className="grid grid-cols-3 gap-3 text-center">
+									<div>
+										<h3 className="text-2xl font-black text-slate-900">Attempts</h3>
+										<p className="mt-8 text-[30px] font-black text-[#3652a3]">{selectedStudent.attempts}</p>
+									</div>
+									<div>
+										<h3 className="text-2xl font-black text-slate-900">Correct</h3>
+										<p className="mt-8 text-[30px] font-black text-emerald-700">{selectedStudent.correct}</p>
+									</div>
+									<div>
+										<h3 className="text-2xl font-black text-slate-900">Wrong</h3>
+										<p className="mt-8 text-[30px] font-black text-red-600">{selectedStudent.wrong}</p>
+									</div>
+								</div>
+							</div>
+						</div>
+
+						<div className="px-5 pb-5 md:px-6">
+							<div className="rounded-xl border border-slate-200 p-4 md:p-5">
+								<div className="mb-4 flex items-center justify-between gap-4">
+									<h3 className="text-[15px] font-black text-slate-900">Performance Over Time</h3>
+									<span className="rounded-full bg-emerald-700 px-4 py-1.5 text-[10px] font-black uppercase tracking-widest text-white">
+										+12% Improvement
+									</span>
+								</div>
+								<div className="h-[250px]">
+									<ResponsiveContainer width="100%" height="100%">
+										<LineChart data={selectedStudent.performance} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+											<CartesianGrid stroke="#e5e7eb" />
+											<XAxis dataKey="week" tick={{ fill: '#a1a1aa', fontSize: 12, fontWeight: 700 }} axisLine={false} tickLine={false} />
+											<YAxis tick={{ fill: '#a1a1aa', fontSize: 12, fontWeight: 700 }} axisLine={false} tickLine={false} domain={[0, 100]} />
+											<Tooltip labelStyle={{ color: '#0f172a', fontWeight: 800 }} />
+											<Line type="monotone" dataKey="score" stroke="#1d7a4d" strokeWidth={2.5} dot={{ r: 4, strokeWidth: 2, fill: '#fff' }} />
+										</LineChart>
+									</ResponsiveContainer>
+								</div>
+							</div>
+						</div>
+
+						<div className="px-5 pb-5 md:px-6">
+							<div className="rounded-xl border border-slate-200 p-4 md:p-5">
+								<h3 className="text-[15px] font-black text-slate-900">Drill History</h3>
+								<div className="mt-4 space-y-3">
+									{selectedStudent.drillHistory.map((item) => (
+										<div key={`${item.subject}-${item.date}`} className="flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
+											<div>
+												<p className="text-sm font-black text-slate-800">{item.subject}</p>
+												<p className="text-xs font-semibold text-slate-400">{item.date}</p>
+											</div>
+											<div className="text-right">
+												<p className="text-sm font-black text-[#3652a3]">{item.score}</p>
+												<p className={`text-[10px] font-black uppercase tracking-widest ${item.status === 'Passed' ? 'text-emerald-600' : 'text-red-600'}`}>{item.status}</p>
+											</div>
+										</div>
+									))}
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
+			) : null}
+
+			<Panel title="Students Performance Overview" icon={Trophy}>
+				<div className="overflow-x-auto">
+					<table className="min-w-full border-separate border-spacing-0">
+						<thead>
+							<tr className="bg-slate-100/90 text-left">
+								{['Student Name', 'Email', 'Accuracy', 'Weakest Subject', 'Status', 'Action'].map((heading) => (
+									<th key={heading} className="px-5 py-4 text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">
+										{heading}
+									</th>
+								))}
+							</tr>
+						</thead>
+						<tbody>
+							{students.map((student) => (
+								<tr key={`${student.email}-${student.accuracy}`} className="border-t border-slate-100">
+									<td className="px-5 py-5 text-sm font-black text-slate-900">{student.name}</td>
+									<td className="px-5 py-5 text-sm font-semibold text-slate-600">{student.email}</td>
+									<td className="px-5 py-5">
+										<div className="flex items-center gap-3">
+											<div className="h-2 w-20 rounded-full bg-slate-200">
+												<div
+													className={`h-2 rounded-full ${student.accuracy >= 60 ? 'bg-emerald-500' : 'bg-red-500'}`}
+													style={{ width: `${student.accuracy}%` }}
+												/>
+											</div>
+											<span className="text-xs font-black text-slate-700">{student.accuracy}%</span>
+										</div>
+									</td>
+									<td className="px-5 py-5">
+										<span className="rounded-full bg-slate-300 px-4 py-2 text-xs font-black text-[#3652a3]">{student.weakestSubject}</span>
+									</td>
+									<td className="px-5 py-5">
+										<span
+											className={`rounded-full px-4 py-2 text-xs font-black uppercase tracking-widest ${
+												getStudentStatus(student.accuracy) === 'PASSED'
+													? 'bg-emerald-400/80 text-emerald-900'
+													: 'bg-red-300 text-red-700'
+											}`}
+										>
+											{getStudentStatus(student.accuracy)}
+										</span>
+									</td>
+									<td className="px-5 py-5">
+										<button
+											type="button"
+											onClick={() => setSelectedStudent(student)}
+											className="rounded-xl bg-[#3652a3] px-4 py-3 text-xs font-black uppercase tracking-[0.16em] text-white shadow-sm"
+										>
+											View History
+										</button>
+									</td>
+								</tr>
+							))}
+						</tbody>
+					</table>
+				</div>
+			</Panel>
+		</div>
+	);
 };
 
 export default AdminDashboard;

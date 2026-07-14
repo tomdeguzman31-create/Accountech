@@ -159,7 +159,21 @@ export const questionApi = {
       body: JSON.stringify({ questions }),
     }, token);
   },
+
+  update(token: string, id: string, updates: Record<string, unknown>) {
+    return request<{ message: string }>(`/questions/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(updates),
+    }, token);
+  },
+
+  delete(token: string, id: string) {
+    return request<{ message: string }>(`/questions/${id}`, {
+      method: 'DELETE',
+    }, token);
+  },
 };
+
 
 export const drillApi = {
   assignedContent(token: string) {
@@ -265,11 +279,17 @@ export type FacultyInstructionalReport = {
     completionRate: number;
     sessionsTaken: number;
   }>;
+  questionMetrics?: Array<{
+    questionId: string;
+    attempts: number;
+    correct: number;
+  }>;
   studentProgressSchema: {
     collection: string;
     fields: Record<string, string>;
   };
 };
+
 
 export type AdminReadinessReport = {
   generatedAt: string;
@@ -325,7 +345,29 @@ export const analyticsApi = {
       token,
     );
   },
+
+  studentHistory(token: string, studentId: string) {
+    return request<{
+      studentId: string;
+      name: string;
+      email: string;
+      section: string;
+      department: string;
+      summary: { overallAccuracy: number; totalSessions: number; passedSessions: number };
+      sessions: Array<{
+        id: string;
+        subjectId: string;
+        subjectCode: string;
+        subjectName: string;
+        score: number;
+        totalQuestions: number;
+        accuracyPercentage: number;
+        takenAt: string;
+      }>;
+    }>(`/analytics/student/${studentId}`, { method: 'GET' }, token);
+  },
 };
+
 
 export const adminApi = {
   readinessReport(token: string) {

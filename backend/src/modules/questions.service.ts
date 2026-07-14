@@ -58,10 +58,12 @@ async function insertOne(question: NewQuestion, createdBy: string): Promise<void
 export async function listQuestions(req: Request, res: Response): Promise<void> {
   const subjectId = req.query.subjectId ? String(req.query.subjectId) : null;
   const difficulty = req.query.difficulty ? String(req.query.difficulty) : null;
+  const isActive = req.query.isActive !== undefined ? req.query.isActive === 'true' : null;
 
-  const filter: Record<string, unknown> = { isActive: true };
+  const filter: Record<string, unknown> = {};
   if (subjectId) filter.subjectId = subjectId;
   if (difficulty) filter.difficulty = difficulty;
+  if (isActive !== null) filter.isActive = isActive;
 
   const rows = await QuestionModel.find(filter)
     .populate('subjectId', 'code name')
@@ -71,8 +73,8 @@ export async function listQuestions(req: Request, res: Response): Promise<void> 
   res.json(
     rows.map((row) => ({
       id: row._id.toString(),
-      subjectId: (row.subjectId as { _id: { toString(): string } })._id.toString(),
-      subjectCode: (row.subjectId as { code: string }).code,
+      subjectId: (row.subjectId as { _id: { toString(): string } })?._id?.toString() ?? '',
+      subjectCode: (row.subjectId as { code: string })?.code ?? '',
       topic: row.topic,
       difficulty: row.difficulty,
       content: row.content,
@@ -82,6 +84,7 @@ export async function listQuestions(req: Request, res: Response): Promise<void> 
       optionD: row.options?.D ?? '',
       correctAnswer: row.correctAnswer,
       referenceText: row.referenceText,
+      isActive: row.isActive,
     })),
   );
 }
@@ -111,3 +114,64 @@ export async function createQuestionsBulk(req: Request, res: Response): Promise<
 
   res.status(201).json({ message: `${questions.length} questions inserted` });
 }
+
+export async function updateQuestion(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    throw new ApiError(401, 'Unauthorized');
+  }
+
+  const { id } = req.params;
+  const updates = req.body as Partial<NewQuestion & { isActive: boolean }>;
+
+  if (!id || !isValidObjectId(id)) {
+    throw new ApiError(400, 'Invalid question ID');
+  }
+
+  const formattedUpdates: Record<string, any> = {};
+  if (updates.subjectId) {
+    if (!isValidObjectId(updates.subjectId)) {
+      throw new ApiError(400, 'subjectId must be a valid ObjectId');
+    }
+    formattedUpdates.subjectId = updates.subjectId;
+  }
+  if (updates.topic) formattedUpdates.topic = updates.topic;
+  if (updates.difficulty) formattedUpdates.difficulty = updates.difficulty;
+  if (updates.content) formattedUpdates.content = updates.content;
+  if (updates.options) {
+    formattedUpdates.options = {
+      A: updates.options.A,
+      B: updates.options.B,
+      C: updates.options.C,
+      D: updates.options.D,
+    };
+  }
+  if (updates.correctAnswer) formattedUpdates.correctAnswer = updates.correctAnswer;
+  if (updates.referenceText !== undefined) formattedUpdates.referenceText = updates.referenceText;
+  if (updates.isActive !== undefined) formattedUpdates.isActive = updates.isActive;
+
+  const updated = await QuestionModel.findByIdAndUpdate(id, { $set: formattedUpdates }, { new: true });
+  if (!updated) {
+    throw new ApiError(404, 'Question not found');
+  }
+
+  res.json({ message: 'Question updated successfully', question: updated });
+}
+
+export async function deleteQuestion(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    throw new ApiError(401, 'Unauthorized');
+  }
+
+  const { id } = req.params;
+  if (!id || !isValidObjectId(id)) {
+    throw new ApiError(400, 'Invalid question ID');
+  }
+
+  const result = await QuestionModel.findByIdAndDelete(id);
+  if (!result) {
+    throw new ApiError(404, 'Question not found');
+  }
+
+  res.json({ message: 'Question deleted successfully' });
+}
+
